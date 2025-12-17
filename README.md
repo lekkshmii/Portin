@@ -9,7 +9,7 @@
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 [![Cost](https://img.shields.io/badge/Cost-$0-success?style=for-the-badge)]()
 
-**Discover, research, and screen M&A targets using AI — completely free.**
+**Discover, research, and screen M&A targets.**
 
 [Features](#features) • [Quick Start](#quick-start) • [How It Works](#how-it-works) • [Documentation](#documentation)
 
