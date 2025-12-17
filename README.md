@@ -288,7 +288,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 <div align="center">
 
-**Built with Gemini AI**
 
 [Back to Top](#portin)
 
