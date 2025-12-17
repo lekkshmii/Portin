@@ -1,0 +1,24 @@
+# Portin Dependencies
+# Install with: pip install -r requirements.txt
+# Then run: python -m playwright install
+
+# Core
+google-generativeai
+requests
+openpyxl
+python-dotenv
+
+# Phase 1: Foundation
+pydantic>=2.0
+tenacity>=8.0
+structlog>=23.0
+duckduckgo-search>=4.0
+
+# Phase 2: Better Discovery
+crawl4ai>=0.2.0
+playwright>=1.40.0  # Required for Crawl4AI browser automation
+
+# Selenium (for scraper templates)
+selenium
+undetected-chromedriver
+selenium-stealth
