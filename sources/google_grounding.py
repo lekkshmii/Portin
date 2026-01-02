@@ -42,7 +42,8 @@ def search_with_grounding(
     query: str,
     extract_companies: bool = True,
     industry_filter: List[str] = None,
-    geography_filter: List[str] = None
+    geography_filter: List[str] = None,
+    logger=print
 ) -> Dict:
     """
     Search using Gemini with Google Grounding.
@@ -62,7 +63,7 @@ def search_with_grounding(
 
     # Try new SDK first (has proper grounding support)
     if _USE_NEW_SDK:
-        return _search_with_new_sdk(query, extract_companies, industry_filter, geography_filter)
+        return _search_with_new_sdk(query, extract_companies, industry_filter, geography_filter, logger)
     else:
         # Fallback to old SDK (limited grounding support)
         return _search_with_old_sdk(query, extract_companies, industry_filter, geography_filter)
@@ -72,7 +73,8 @@ def _search_with_new_sdk(
     query: str,
     extract_companies: bool,
     industry_filter: List[str],
-    geography_filter: List[str]
+    geography_filter: List[str],
+    logger=print
 ) -> Dict:
     """Use the new google-genai SDK with proper grounding support."""
     try:
@@ -128,7 +130,7 @@ List as many relevant companies as you can find from the search results."""
 
                 if hasattr(metadata, 'web_search_queries'):
                     for q in metadata.web_search_queries:
-                        print(f"   [Grounding] Search: {q}")
+                        logger(f"   [Grounding] Search: {q}")
 
                 if hasattr(metadata, 'grounding_chunks'):
                     for chunk in metadata.grounding_chunks:
@@ -153,7 +155,7 @@ List as many relevant companies as you can find from the search results."""
         }
 
     except Exception as e:
-        print(f"[ERROR] Google Grounding (new SDK) failed: {e}")
+        logger(f"[ERROR] Google Grounding (new SDK) failed: {e}")
         # Try fallback to old SDK
         return _search_with_old_sdk(query, extract_companies, industry_filter, geography_filter)
 
@@ -293,7 +295,8 @@ JSON only:"""
 def search_competitors_grounded(
     reference_companies: List[str],
     industry: str,
-    geography: List[str] = None
+    geography: List[str] = None,
+    logger=print
 ) -> List[Dict]:
     """
     Search for competitors of reference companies using Google Grounding.
@@ -310,7 +313,7 @@ def search_competitors_grounded(
     seen_names = set()
 
     for ref_company in reference_companies[:3]:
-        print(f"\n   [Grounding] Searching competitors of {ref_company}...")
+        logger(f"\n   [Grounding] Searching competitors of {ref_company}...")
 
         # Query 1: Direct competitors
         query1 = f"Who are the main competitors of {ref_company}? List {industry} companies that compete with {ref_company}."
@@ -318,7 +321,8 @@ def search_competitors_grounded(
             query1,
             extract_companies=True,
             industry_filter=[industry],
-            geography_filter=geography
+            geography_filter=geography,
+            logger=logger
         )
 
         for company in result1.get('companies', []):
@@ -338,7 +342,8 @@ def search_competitors_grounded(
             query2,
             extract_companies=True,
             industry_filter=[industry],
-            geography_filter=geography
+            geography_filter=geography,
+            logger=logger
         )
 
         for company in result2.get('companies', []):
@@ -357,7 +362,8 @@ def search_industry_companies_grounded(
     industry: str,
     keywords: List[str],
     geography: List[str] = None,
-    size_preference: str = "mid-market"
+    size_preference: str = "mid-market",
+    logger=print
 ) -> List[Dict]:
     """
     Search for companies in an industry using Google Grounding.
@@ -392,13 +398,14 @@ def search_industry_companies_grounded(
         queries.append(f"Top {keyword} companies {geo_str}")
 
     for query in queries:
-        print(f"   [Grounding] {query[:50]}...")
+        logger(f"   [Grounding] {query[:50]}...")
 
         result = search_with_grounding(
             query,
             extract_companies=True,
             industry_filter=[industry] + keywords[:3],
-            geography_filter=geography
+            geography_filter=geography,
+            logger=logger
         )
 
         for company in result.get('companies', []):

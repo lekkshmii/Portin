@@ -31,9 +31,16 @@
             <a href="/pipeline" class="btn btn-primary">
                 <span>+</span> New Research
             </a>
-            <button class="btn btn-danger" onclick="openDeleteModal('{{ url_for('clear_db') }}', 'ENTIRE DATABASE')">
-                Clear All
+            <a href="/export/csv?session={{ filters.session }}" class="btn"
+                style="background: #F1F5F9; color: #475569; border: 1px solid #cbd5e1;">
+                Export CSV
+            </a>
+            {% if filters.session != 'all' %}
+            <button class="btn btn-danger"
+                onclick="openDeleteModal('/clear-session/{{ filters.session }}', 'Session #{{ filters.session }}')">
+                Clear Session
             </button>
+            {% endif %}
         </div>
     </div>
 

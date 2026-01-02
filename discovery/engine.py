@@ -66,12 +66,24 @@ class AggressiveDiscoveryEngine:
         # Reference company profiles (populated by profiling step)
         self.reference_profiles = []
         self.enhanced_keywords = []
+
+        # Log callback (for dashboard streaming)
+        self.log_callback = None
     
+    def log(self, message: str):
+        """Log message to stdout and optional callback."""
+        print(message)
+        if self.log_callback:
+            try:
+                self.log_callback(message)
+            except:
+                pass
+
     def ask_search_preference(self):
         """Ask user which search engine to use."""
         # Non-blocking check for dashboard/CLI pre-config
         if self.search_engine:
-            print(f"[INFO] Using pre-configured search engine: {self.search_engine}")
+            self.log(f"[INFO] Using pre-configured search engine: {self.search_engine}")
             return
 
         print("\n" + "─"*50)
@@ -87,19 +99,19 @@ class AggressiveDiscoveryEngine:
 
             if choice == "1":
                 self.search_engine = "google"
-                print("\n[INFO] Using Google (Serper API)\n")
+                self.log("\n[INFO] Using Google (Serper API)\n")
                 return
             elif choice == "2":
                 self.search_engine = "duckduckgo"
-                print("\n[INFO] Using DuckDuckGo (Free)\n")
+                self.log("\n[INFO] Using DuckDuckGo (Free)\n")
                 return
             elif choice == "3":
                 self.search_engine = "both"
-                print("\n[INFO] Using Google with DuckDuckGo fallback\n")
+                self.log("\n[INFO] Using Google with DuckDuckGo fallback\n")
                 return
             elif choice == "4":
                 self.search_engine = "grounding"
-                print("\n[INFO] Using Google Grounding (Gemini real-time search)\n")
+                self.log("\n[INFO] Using Google Grounding (Gemini real-time search)\n")
                 return
             else:
                 print("[ERROR] Please enter 1, 2, 3, or 4")
@@ -118,7 +130,7 @@ class AggressiveDiscoveryEngine:
         if reference_companies:
             self._profile_reference_companies(reference_companies)
         
-        print("[INFO] Starting multi-source discovery...\n")
+        self.log("[INFO] Starting multi-source discovery...\n")
         
         # Initialize database session
         self._init_database_session()
@@ -143,7 +155,7 @@ class AggressiveDiscoveryEngine:
             available_sources = [s for s in available_sources if s != 'google_directories']
             available_sources.append('google_grounding')
 
-        print(f"Available sources: {', '.join(available_sources)}\n")
+        self.log(f"Available sources: {', '.join(available_sources)}\n")
         
         # Run sources in parallel
         with ThreadPoolExecutor(max_workers=3) as executor:
@@ -398,11 +410,11 @@ class AggressiveDiscoveryEngine:
                 check_google_grounding_available
             )
         except ImportError as e:
-            print(f"[ERROR] google_grounding module not found: {e}")
+            self.log(f"[ERROR] google_grounding module not found: {e}")
             return []
 
         if not check_google_grounding_available():
-            print("[ERROR] Google Grounding requires GEMINI_API_KEY")
+            self.log("[ERROR] Google Grounding requires GEMINI_API_KEY")
             return []
 
         companies = []
@@ -424,26 +436,28 @@ class AggressiveDiscoveryEngine:
 
         # Phase 1: Search for competitors of reference companies
         if reference_companies:
-            print(f"   [Phase 1] Searching competitors of: {', '.join(reference_companies[:3])}")
+            self.log(f"   [Phase 1] Searching competitors of: {', '.join(reference_companies[:3])}")
             competitor_results = search_competitors_grounded(
                 reference_companies=reference_companies[:3],
                 industry=main_industry,
-                geography=regions
+                geography=regions,
+                logger=self.log
             )
             companies.extend(competitor_results)
-            print(f"   Found {len(competitor_results)} from competitor search")
+            self.log(f"   Found {len(competitor_results)} from competitor search")
             time.sleep(2)
 
         # Phase 2: Search for industry companies
-        print(f"   [Phase 2] Searching {main_industry} companies in {regions[0] if regions else 'USA'}...")
+        self.log(f"   [Phase 2] Searching {main_industry} companies in {regions[0] if regions else 'USA'}...")
         industry_results = search_industry_companies_grounded(
             industry=main_industry,
             keywords=keywords[:5],
             geography=regions,
-            size_preference="mid-market"
+            size_preference="mid-market",
+            logger=self.log
         )
         companies.extend(industry_results)
-        print(f"   Found {len(industry_results)} from industry search")
+        self.log(f"   Found {len(industry_results)} from industry search")
 
         # Deduplicate
         seen_names = set()
@@ -463,7 +477,7 @@ class AggressiveDiscoveryEngine:
         Uses bulk data + Gemini filtering for fast, smart results.
         """
         
-        print("\n[INFO] Searching SEC EDGAR for US public companies...\n")
+        self.log("\n[INFO] Searching SEC EDGAR for US public companies...\n")
         
         try:
             from sources.sec_edgar import SECEdgarSearch
@@ -505,7 +519,7 @@ class AggressiveDiscoveryEngine:
             except Exception as e:
                 print(f"      SEC search error: {e}")
         
-        print(f"\n   SEC EDGAR found {len(companies)} public companies")
+        self.log(f"\n   SEC EDGAR found {len(companies)} public companies")
         return companies
     
     def discover_via_opencorporates(self) -> List[Dict]:
@@ -514,7 +528,7 @@ class AggressiveDiscoveryEngine:
         Searches by industry keywords in US and UK jurisdictions.
         """
         
-        print("\n[INFO] Searching OpenCorporates for company registry data...\n")
+        self.log("\n[INFO] Searching OpenCorporates for company registry data...\n")
         
         try:
             from sources.opencorporates import OpenCorporatesSearch
@@ -566,7 +580,7 @@ class AggressiveDiscoveryEngine:
                 seen_names.add(name_lower)
                 unique_companies.append(c)
         
-        print(f"\n   OpenCorporates found {len(unique_companies)} companies")
+        self.log(f"\n   OpenCorporates found {len(unique_companies)} companies")
         return unique_companies
     
     def generate_search_queries(self) -> List[str]:

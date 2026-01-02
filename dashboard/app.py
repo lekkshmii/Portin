@@ -28,6 +28,9 @@ app.secret_key = 'portin_dashboard_secret_key'
 # Initialize DB
 init_database()
 
+# Global log store for real-time streaming
+SESSION_LOGS = {}
+
 # Helper background task
 def run_discovery_bg(session_id, criteria, engine_type):
     """Run discovery in a separate thread."""
@@ -39,6 +42,14 @@ def run_discovery_bg(session_id, criteria, engine_type):
         engine = AggressiveDiscoveryEngine(criteria)
         engine.session_id = session_id
         engine.search_engine = engine_type
+        
+        # Setup logging
+        SESSION_LOGS[session_id] = []
+        def log_callback(msg):
+            ts = datetime.now().strftime("%H:%M:%S")
+            SESSION_LOGS[session_id].append(f"<span class='log-time'>{ts}</span> {msg}")
+            
+        engine.log_callback = log_callback
         
         # Run
         companies = engine.discover_all_sources()
@@ -139,7 +150,7 @@ def pipeline_intake():
     """Handle Step 1: Intake Form."""
     form_data = request.form.to_dict()
     
-    # 1. Process with AI Consultant
+    # 1. Process with Porto (Research Consultant)
     consultant = AIResearchConsultant()
     criteria = consultant.process_form_inputs(form_data)
     
@@ -169,6 +180,97 @@ def pipeline_intake():
         session_id = create_session(criteria=criteria)
     
     # 3. Render Step 2 (Discovery UI)
+    # Note: Auto-enrich is available via button click, not on initial load
+    return render_template('partials/step_discovery.html', 
+                         session_id=session_id, 
+                         criteria=criteria)
+
+def save_criteria_to_json(criteria):
+    """Sync criteria to output/search_criteria.json for consistency."""
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        output_dir = os.path.join(project_root, 'output')
+        os.makedirs(output_dir, exist_ok=True)
+        filepath = os.path.join(output_dir, 'search_criteria.json')
+        
+        with open(filepath, 'w') as f:
+            json.dump(criteria, f, indent=4)
+        print(f"[Sync] Saved criteria to {filepath}")
+    except Exception as e:
+        print(f"[Sync] Failed to save criteria to JSON: {e}")
+
+@app.route('/pipeline/enrich-reference', methods=['POST'])
+def enrich_reference():
+    """Step 2b: Auto-enrich keywords from reference companies."""
+    session_id = request.form.get('session_id')
+    refs_str = request.form.get('reference_companies', '')
+    
+    session = get_session(session_id)
+    if not session:
+        return "Session not found", 404
+    criteria = session['criteria']
+    
+    # Parse references
+    refs = [r.strip() for r in refs_str.split(',') if r.strip()]
+    if refs:
+        # Update references in criteria
+        criteria['industry']['reference_companies'] = refs
+        
+        # Init engine to access profiling logic
+        engine = AggressiveDiscoveryEngine(criteria)
+        
+        # Run profiling (updates engine.enhanced_keywords)
+        # Note: We need to capture logs for this too? For now, just run it.
+        # It prints to stdout, which is fine.
+        engine._profile_reference_companies(refs)
+        
+        # Merge new keywords
+        current_kws = set(criteria['industry'].get('keywords', []))
+        if engine.enhanced_keywords:
+            for kw in engine.enhanced_keywords:
+                current_kws.add(kw)
+            criteria['industry']['keywords'] = list(current_kws)
+            
+        # Save updates to DB
+        update_session_criteria(session_id, criteria)
+        
+        # Sync to JSON file
+        save_criteria_to_json(criteria)
+        
+    return render_template('partials/step_discovery.html', 
+                         session_id=session_id, 
+                         criteria=criteria,
+                         enriched_keywords=engine.enhanced_keywords if 'engine' in locals() and engine.enhanced_keywords else [])
+
+@app.route('/pipeline/update-criteria', methods=['POST'])
+def update_criteria_route():
+    """Step 2c: Manual criteria update."""
+    session_id = request.form.get('session_id')
+    session = get_session(session_id)
+    if not session:
+        return "Session not found", 404
+        
+    criteria = session['criteria']
+    
+    # Update fields from form
+    criteria['industry']['keywords'] = [k.strip() for k in request.form.get('keywords', '').split(',') if k.strip()]
+    criteria['industry']['reference_companies'] = [r.strip() for r in request.form.get('reference_companies', '').split(',') if r.strip()]
+    
+    # New: Additional Context
+    criteria['additional_context'] = request.form.get('additional_context', '').strip()
+    
+    try:
+        criteria['revenue']['revenue_min_millions'] = int(request.form.get('revenue_min', 0))
+        criteria['revenue']['revenue_max_millions'] = int(request.form.get('revenue_max', 1000))
+    except (ValueError, TypeError):
+        pass
+    
+    # Save to DB
+    update_session_criteria(session_id, criteria)
+    
+    # Sync to JSON file
+    save_criteria_to_json(criteria)
+    
     return render_template('partials/step_discovery.html', 
                          session_id=session_id, 
                          criteria=criteria)
@@ -176,7 +278,7 @@ def pipeline_intake():
 @app.route('/pipeline/start-discovery', methods=['POST'])
 def start_discovery():
     """Handle Step 2: Start Discovery."""
-    session_id = request.form.get('session_id')
+    session_id = int(request.form.get('session_id'))
     engine_type = request.form.get('engine', 'grounding')
     
     # Get session details to retrieve criteria
@@ -235,6 +337,18 @@ def pipeline_status():
                              companies_found=count,
                              status=status)
 
+@app.route('/pipeline/logs')
+def get_logs():
+    """Get real-time logs for a session."""
+    session_id = request.args.get('session_id')
+    try:
+        session_id = int(session_id)
+        logs = SESSION_LOGS.get(session_id, [])
+        # Return only last 8 lines for clean UI
+        return "".join([f"<div class='log-line'>{l}</div>" for l in logs[-8:]])
+    except:
+        return ""
+
 @app.route('/discovery')
 def discovery():
     """Discovery Control Page."""
@@ -281,6 +395,14 @@ def delete_company(company_id):
     flash(f"Company {company_id} deleted", "success")
     return redirect(url_for('index'))
 
+@app.route('/clear-session/<int:session_id>')
+def clear_session(session_id):
+    """Clear all companies from a specific session."""
+    with get_db_connection() as conn:
+        conn.execute("DELETE FROM companies WHERE session_id = ?", (session_id,))
+    flash(f"Session #{session_id} cleared successfully", "success")
+    return redirect(url_for('index'))
+
 @app.route('/clear')
 def clear_db():
     """Clear entire database."""
@@ -297,6 +419,64 @@ def clear_db():
 def api_stats():
     """JSON API for stats (for auto-refresh)."""
     return jsonify(get_database_stats())
+
+@app.route('/export/csv')
+def export_csv():
+    """Export companies as CSV."""
+    import csv
+    import io
+    
+    session_filter = request.args.get('session', 'all')
+    
+    # Build query
+    query = "SELECT * FROM companies WHERE 1=1"
+    params = []
+    
+    if session_filter != 'all':
+        try:
+            query += " AND session_id = ?"
+            params.append(int(session_filter))
+        except ValueError:
+            pass
+    
+    query += " ORDER BY score DESC"
+    
+    # Get companies
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    
+    # Generate CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header
+    writer.writerow(['Name', 'Domain', 'Website', 'Score', 'Status', 'Session ID', 'Source'])
+    
+    # Data
+    for row in rows:
+        c = dict(row)
+        writer.writerow([
+            c.get('name', ''),
+            c.get('domain', ''),
+            c.get('website', ''),
+            c.get('score', ''),
+            c.get('status', ''),
+            c.get('session_id', ''),
+            c.get('source', '')
+        ])
+    
+    # Return as download
+    from flask import Response
+    output.seek(0)
+    filename = f"portin_export_session_{session_filter}.csv" if session_filter != 'all' else "portin_export_all.csv"
+    
+    return Response(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename={filename}'}
+    )
 
 if __name__ == '__main__':
     print("Starting Portin Dashboard (Glassmorphism Edition)...")

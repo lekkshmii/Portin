@@ -84,6 +84,9 @@ class AIResearchConsultant:
                 question = questions_map[field_id]
                 self.parse_and_store(field_id, question, answer)
         
+        # Save to output/search_criteria.json for debugging/reference
+        self.export_criteria()
+        
         return self.criteria
 
     def conduct_interview(self):

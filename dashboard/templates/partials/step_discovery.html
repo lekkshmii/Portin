@@ -1,92 +1,190 @@
-<div class="fade-in">
+<div class="fade-in" id="step-2-container">
     <div style="text-align: center; margin-bottom: 2rem;">
         <h2 style="font-size: 1.5rem; font-weight: 600;">Discovery Setup</h2>
         <div class="badge badge-success" style="margin-top: 0.5rem;">Session #{{ session_id }} Created</div>
-
-        <!-- Progress Bar (Step 2) -->
-        <div style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; opacity: 0.8;">
-            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
-            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
-            <div style="height: 4px; width: 40px; background: rgba(0,0,0,0.1); border-radius: 2px;"></div>
-        </div>
     </div>
 
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; max-width: 900px; margin: 0 auto;">
 
-        <!-- Criteria Summary -->
-        <div class="glass-panel" style="background: rgba(255,255,255,0.3); padding: 1.5rem; margin: 0;">
-            <h3
-                style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted); text-transform: uppercase;">
-                AI Analysis Summary
-            </h3>
+        <!-- Left Column: Criteria Summary / Editor -->
+        <div>
+            <!-- View Mode -->
+            <div id="criteria-view">
+                <div class="glass-panel"
+                    style="background: rgba(255,255,255,0.4); padding: 1.5rem; margin-bottom: 1rem;">
+                    <h3
+                        style="font-size: 1rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin: 0 0 1rem 0;">
+                        Porto's Analysis Summary
+                    </h3>
 
-            <div style="font-size: 0.95rem;">
-                <p><strong>Keywords:</strong> {{ criteria.industry.keywords | join(', ') }}</p>
-                <p><strong>Revenue:</strong> ${{ criteria.revenue.revenue_min_millions }}M - ${{
-                    criteria.revenue.revenue_max_millions }}M</p>
-                <p><strong>Locations:</strong>
-                    {% if criteria.geography.regions %}
-                    {{ criteria.geography.regions | join(', ') }}
-                    {% else %}
-                    Global
-                    {% endif %}
-                </p>
-                {% if criteria.industry.reference_companies %}
-                <p><strong>References:</strong> {{ criteria.industry.reference_companies | join(', ') }}</p>
-                {% endif %}
+                    <div style="font-size: 0.95rem;">
+                        <p style="margin-bottom: 0.5rem;"><strong>Keywords:</strong> {{ criteria.industry.keywords |
+                            join(', ') }}</p>
+                        <p style="margin-bottom: 0.5rem;"><strong>Revenue:</strong> ${{
+                            criteria.revenue.revenue_min_millions }}M - ${{ criteria.revenue.revenue_max_millions }}M
+                        </p>
+                        <p style="margin-bottom: 0.5rem;"><strong>Locations:</strong>
+                            {% if criteria.geography.regions %}
+                            {{ criteria.geography.regions | join(', ') }}
+                            {% else %}
+                            Global
+                            {% endif %}
+                        </p>
+                        <p style="margin-bottom: 0.5rem;"><strong>References:</strong>
+                            {% if criteria.industry.reference_companies %}
+                            {{ criteria.industry.reference_companies | join(', ') }}
+                            {% else %}
+                            <span style="color: var(--text-muted); font-style: italic;">None provided</span>
+                            {% endif %}
+                        </p>
+                        {% if criteria.additional_context %}
+                        <p style="margin-bottom: 0.5rem;"><strong>Context:</strong> <span
+                                style="font-style: italic;">"{{ criteria.additional_context }}"</span></p>
+                        {% endif %}
+
+                        {% if enriched_keywords %}
+                        <p style="margin-bottom: 0.5rem; padding-top: 0.5rem; border-top: 1px solid rgba(0,0,0,0.1);">
+                            <strong>Porto Enhanced:</strong>
+                            <span style="color: var(--primary-color);">{{ enriched_keywords | join(', ') }}</span>
+                        </p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <button type="button" class="btn"
+                    onclick="document.getElementById('criteria-view').style.display='none'; document.getElementById('criteria-edit').style.display='block';"
+                    style="width: 100%; background: rgba(255,255,255,0.5); border: 1px solid rgba(0,0,0,0.1); color: var(--primary-color);">
+                    Refine Criteria
+                </button>
+            </div>
+
+            <!-- Edit Mode -->
+            <div id="criteria-edit" class="glass-panel"
+                style="display: none; background: #fff; padding: 1.5rem; margin: 0; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+                <h3 style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem;">Refine Search Criteria</h3>
+
+                <form hx-post="/pipeline/update-criteria" hx-target="#step-2-container" hx-swap="outerHTML">
+                    <input type="hidden" name="session_id" value="{{ session_id }}">
+
+                    <div style="margin-bottom: 1rem;">
+                        <label
+                            style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">Keywords</label>
+                        <input type="text" name="keywords" value="{{ criteria.industry.keywords | join(', ') }}"
+                            class="input-field" style="width: 100%;">
+                    </div>
+
+                    <div style="margin-bottom: 1rem;">
+                        <label
+                            style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">Reference
+                            Companies</label>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <input type="text" name="reference_companies"
+                                value="{{ criteria.industry.reference_companies | join(', ') }}" class="input-field"
+                                style="width: 100%;" placeholder="e.g. Apple, Microsoft">
+                            <button type="button" class="btn" hx-post="/pipeline/enrich-reference"
+                                hx-include="[name='reference_companies'], [name='session_id']"
+                                hx-target="#step-2-container" hx-swap="outerHTML" hx-disabled-elt="this"
+                                onclick="this.innerHTML='Enriching...'; this.style.opacity='0.7'; this.style.cursor='not-allowed';"
+                                title="Porto will analyze these companies to improve keywords"
+                                style="white-space: nowrap; padding: 0 10px;">
+                                Auto-Enrich
+                            </button>
+                        </div>
+                        <small style="color: var(--text-muted);">Click 'Auto-Enrich' for Porto to improve keywords using
+                            these companies.</small>
+                    </div>
+
+                    <div style="margin-bottom: 1rem;">
+                        <label
+                            style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">Additional
+                            Context (Optional)</label>
+                        <textarea name="additional_context" class="input-field" rows="2"
+                            style="width: 100%; font-family: inherit;"
+                            placeholder="Tell Porto more about what you're looking for (e.g. 'Exclude plastic packaging')">{{ criteria.additional_context | default('') }}</textarea>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                        <div>
+                            <label
+                                style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">Min
+                                Revenue ($M)</label>
+                            <input type="number" name="revenue_min" value="{{ criteria.revenue.revenue_min_millions }}"
+                                class="input-field" style="width: 100%;">
+                        </div>
+                        <div>
+                            <label
+                                style="display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">Max
+                                Revenue ($M)</label>
+                            <input type="number" name="revenue_max" value="{{ criteria.revenue.revenue_max_millions }}"
+                                class="input-field" style="width: 100%;">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; gap: 1rem; margin-top: 1.5rem;">
+                        <button type="submit" class="btn btn-primary" style="flex: 1;">Save Updates</button>
+                        <button type="button" class="btn"
+                            onclick="document.getElementById('criteria-edit').style.display='none'; document.getElementById('criteria-view').style.display='block';"
+                            style="flex: 1;">Cancel</button>
+                    </div>
+                </form>
             </div>
         </div>
 
-        <!-- Engine Selection -->
-        <form hx-post="/pipeline/start-discovery" hx-target="#pipeline-content" hx-swap="innerHTML">
-            <input type="hidden" name="session_id" value="{{ session_id }}">
+        <!-- Right Column: Engine Selection -->
+        <div>
+            <form hx-post="/pipeline/start-discovery" hx-target="#pipeline-content" hx-swap="innerHTML">
+                <input type="hidden" name="session_id" value="{{ session_id }}">
 
-            <h3
-                style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted); text-transform: uppercase;">
-                Select Search Engine
-            </h3>
+                <h3
+                    style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted); text-transform: uppercase;">
+                    Select Search Engine
+                </h3>
 
-            <div style="display: grid; gap: 1rem;">
-                <label
-                    style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer;">
-                    <input type="radio" name="engine" value="grounding" checked style="margin-top: 0.25rem;">
-                    <div>
-                        <div style="font-weight: 600;">Google Grounding (Active Search)</div>
-                        <div style="font-size: 0.85rem; color: var(--text-muted);">Uses Gemini's real-time web search.
-                            Best for finding companies described by concept rather than keyword.</div>
-                        <div class="badge badge-success" style="margin-top: 0.5rem; font-size: 0.7rem;">Recommended
+                <div style="display: grid; gap: 1rem;">
+                    <label
+                        style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer; transition: all 0.2s;">
+                        <input type="radio" name="engine" value="grounding" checked style="margin-top: 0.25rem;">
+                        <div>
+                            <div style="font-weight: 600;">Google Grounding (Active Search)</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted);">Uses Gemini's real-time web
+                                search. Best for finding companies described by concept rather than keyword.</div>
+                            <div class="badge badge-success" style="margin-top: 0.5rem; font-size: 0.7rem;">Recommended
+                            </div>
                         </div>
-                    </div>
-                </label>
+                    </label>
 
-                <label
-                    style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer;">
-                    <input type="radio" name="engine" value="serper">
-                    <div>
-                        <div style="font-weight: 600;">Google (Serper API)</div>
-                        <div style="font-size: 0.85rem; color: var(--text-muted);">Standard Google Search. Good for
-                            specific keywords.</div>
-                    </div>
-                </label>
+                    <label
+                        style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer; transition: all 0.2s;">
+                        <input type="radio" name="engine" value="serper">
+                        <div>
+                            <div style="font-weight: 600;">Google (Serper API)</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted);">Standard Google Search. Good for
+                                specific keywords.</div>
+                        </div>
+                    </label>
 
-                <label
-                    style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer;">
-                    <input type="radio" name="engine" value="duckduckgo">
-                    <div>
-                        <div style="font-weight: 600;">DuckDuckGo</div>
-                        <div style="font-size: 0.85rem; color: var(--text-muted);">Privacy-focused, often yields
-                            different results.</div>
-                    </div>
-                </label>
-            </div>
+                    <label
+                        style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer; transition: all 0.2s;">
+                        <input type="radio" name="engine" value="duckduckgo">
+                        <div>
+                            <div style="font-weight: 600;">DuckDuckGo</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted);">Privacy-focused, often yields
+                                different results.</div>
+                        </div>
+                    </label>
+                </div>
 
-            <button type="submit" class="btn btn-primary"
-                style="width: 100%; margin-top: 2rem; padding: 1rem; justify-content: center;">
-                Start Discovery &rarr;
-            </button>
-            <div class="htmx-indicator" style="text-align: center; margin-top: 1rem;">
-                Starting engine...
-            </div>
-        </form>
+                <button type="submit" class="btn btn-primary"
+                    style="width: 100%; margin-top: 2rem; padding: 1rem; justify-content: center;">
+                    Start Discovery
+                </button>
+                <div class="htmx-indicator"
+                    style="text-align: center; margin-top: 1rem; color: var(--text-muted); font-size: 0.9rem;">
+                    <span class="loader"
+                        style="display: inline-block; width: 12px; height: 12px; border: 2px solid var(--text-muted); border-bottom-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 0.5rem;"></span>
+                    Initializing engine...
+                </div>
+            </form>
+        </div>
     </div>
 </div>
