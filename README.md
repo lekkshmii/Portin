@@ -243,17 +243,6 @@ Select [1/2/3]:
 
 ---
 
-## API Usage
-
-| Service | Free Tier | Used For |
-|---------|-----------|----------|
-| **Gemini** | 1,500 req/day | AI extraction, scoring |
-| **Serper** | 2,500/month | Google search |
-| **Firecrawl** | 500 credits | Web scraping |
-| **SEC EDGAR** | Unlimited | Public company data |
-| **DuckDuckGo** | Unlimited | Search fallback |
-
----
 
 ## Maintenance Utilities
 
