@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Cost](https://img.shields.io/badge/Cost-$0-success?style=for-the-badge)]()
+
 
 **Discover, research, and screen M&A targets using AI — completely free.**
 
@@ -26,7 +26,7 @@
 | **SEC Validation** | Verified financials from 10-K filings for public companies |
 | **Session Tracking** | Keep searches organized (Packaging vs Dairy, etc.) |
 | **Excel Export** | Professional M&A screening spreadsheet output |
-| **Zero Cost** | Uses only free-tier APIs |
+
 
 ---
 
