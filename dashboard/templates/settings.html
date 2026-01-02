@@ -1,0 +1,72 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="glass-panel fade-in">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+        <h2>Settings</h2>
+    </div>
+
+    <!-- Session Management -->
+    <div class="card" style="margin-bottom: 2rem;">
+        <h3 style="margin-bottom: 1rem;">Merge Sessions</h3>
+        <p class="text-muted" style="margin-bottom: 1.5rem;">
+            Consolidate fragmented sessions. Select a "Target" session to keep, and "Source" sessions to merge into it.
+            Source sessions will be deleted after companies are moved.
+        </p>
+
+        <form action="{{ url_for('merge_sessions_route') }}" method="POST">
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-bottom: 2rem;">
+
+                <!-- Target Selection -->
+                <div>
+                    <label style="font-weight: 600; margin-bottom: 0.5rem; display: block;">Target Session (Merge
+                        INTO)</label>
+                    <select name="target_id" class="input-field" style="width: 100%;" required>
+                        <option value="" disabled selected>Select Target...</option>
+                        {% for s in sessions %}
+                        <option value="{{ s.id }}">#{{ s.id }} - {{ s.industry }} ({{ s.discovered }} companies)
+                        </option>
+                        {% endfor %}
+                    </select>
+                    <small>This session will receive all companies.</small>
+                </div>
+
+                <!-- Source Selection -->
+                <div>
+                    <label style="font-weight: 600; margin-bottom: 0.5rem; display: block;">Source Sessions (Merge
+                        FROM)</label>
+                    <div
+                        style="max-height: 200px; overflow-y: auto; padding: 10px; background: rgba(0,0,0,0.03); border-radius: 8px; border: 1px solid rgba(0,0,0,0.05);">
+                        {% for s in sessions %}
+                        <div style="margin-bottom: 0.5rem; display: flex; align-items: center;">
+                            <input type="checkbox" name="source_ids" value="{{ s.id }}" id="s{{ s.id }}"
+                                style="margin-right: 10px;">
+                            <label for="s{{ s.id }}" style="margin: 0; cursor: pointer;">
+                                #{{ s.id }} - {{ s.industry }} <span style="opacity: 0.6;">({{ s.discovered }})</span>
+                            </label>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary"
+                onclick="return confirm('Are you sure? This will move companies and DELETE the source sessions.')">
+                Merge Selected Sessions
+            </button>
+        </form>
+    </div>
+
+    <!-- Danger Zone -->
+    <div class="card" style="border-left: 4px solid #ff6b6b;">
+        <h3 style="color: #c53030; margin-bottom: 1rem;">Danger Zone</h3>
+        <div style="display: flex; gap: 1rem;">
+            <a href="{{ url_for('clear_db') }}" class="btn"
+                style="background: #fff5f5; color: #c53030; border: 1px solid #c53030;"
+                onclick="return confirm('WARNING: This will wipe ALL data. Are you sure?')">
+                Reset Database
+            </a>
+        </div>
+    </div>
+</div>
+{% endblock %}

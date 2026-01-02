@@ -1,0 +1,154 @@
+{% extends "layout.html" %}
+
+{% block content %}
+
+<!-- Stats Grid -->
+<div class="stats-grid fade-in">
+    <div class="stat-card">
+        <div class="stat-label">Total Companies</div>
+        <div class="stat-value">{{ stats.total_companies }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Enriched</div>
+        <div class="stat-value" style="color: var(--status-success-text)">{{ stats.enriched }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Discovered</div>
+        <div class="stat-value" style="color: var(--primary-color)">{{ stats.discovered }}</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-label">Sessions</div>
+        <div class="stat-value">{{ stats.total_sessions }}</div>
+    </div>
+</div>
+
+<!-- Controls & Filters -->
+<div class="glass-panel fade-in" style="animation-delay: 0.1s;">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 600;">Database</h2>
+
+        <div style="display: flex; gap: 0.5rem;">
+            <a href="/pipeline" class="btn btn-primary">
+                <span>+</span> New Research
+            </a>
+            <button class="btn btn-danger" onclick="openDeleteModal('{{ url_for('clear_db') }}', 'ENTIRE DATABASE')">
+                Clear All
+            </button>
+        </div>
+    </div>
+
+    <form method="GET"
+        style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+        <div>
+            <label
+                style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">Session</label>
+            <select name="session" onchange="this.form.submit()">
+                <option value="all">All Sessions</option>
+                {% for s in sessions %}
+                <option value="{{ s.id }}" {% if filters.session|int==s.id %}selected{% endif %}>
+                    #{{ s.id }} - {{ s.industry }} ({{ s.created_at[:10] }})
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label
+                style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">Status</label>
+            <select name="status" onchange="this.form.submit()">
+                <option value="all">All Statuses</option>
+                <option value="discovered" {% if filters.status=='discovered' %}selected{% endif %}>Discovered</option>
+                <option value="enriched" {% if filters.status=='enriched' %}selected{% endif %}>Enriched</option>
+                <option value="failed" {% if filters.status=='failed' %}selected{% endif %}>Failed</option>
+            </select>
+        </div>
+
+        <div>
+            <label style="font-size: 0.85rem; color: var(--text-muted); display: block; margin-bottom: 0.5rem;">Sort
+                By</label>
+            <select name="sort" onchange="this.form.submit()">
+                <option value="score_desc" {% if filters.sort=='score_desc' %}selected{% endif %}>Highest Score</option>
+                <option value="score_asc" {% if filters.sort=='score_asc' %}selected{% endif %}>Lowest Score</option>
+                <option value="name_asc" {% if filters.sort=='name_asc' %}selected{% endif %}>Name (A-Z)</option>
+                <option value="session_desc" {% if filters.sort=='session_desc' %}selected{% endif %}>Newest Session
+                </option>
+            </select>
+        </div>
+    </form>
+</div>
+
+<!-- Table -->
+<div class="glass-panel fade-in" style="padding: 0; overflow: hidden; animation-delay: 0.2s;">
+    {% if companies %}
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th>Company</th>
+                    <th>Score</th>
+                    <th>Status</th>
+                    <th>Location</th>
+                    <th>Website</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for c in companies %}
+                <tr>
+                    <td>
+                        <div style="font-weight: 600; color: var(--text-color);">{{ c.name }}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted);">Session #{{ c.session_id }}</div>
+                    </td>
+                    <td>
+                        {% if c.score %}
+                        <span
+                            style="font-weight: 700; color: {% if c.score >= 80 %}var(--status-success-text){% elif c.score >= 50 %}var(--accent-color){% else %}var(--text-muted){% endif %}">
+                            {{ c.score|int }}
+                        </span>
+                        {% else %}
+                        <span style="color: var(--text-muted);">-</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if c.status == 'enriched' %}
+                        <span class="badge badge-success">Enriched</span>
+                        {% elif c.status == 'failed' %}
+                        <span class="badge badge-error">Failed</span>
+                        {% else %}
+                        <span class="badge badge-neutral">Discovered</span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size: 0.9rem;">
+                        {{ c.location or '-' }}
+                    </td>
+                    <td>
+                        {% if c.website %}
+                        <a href="{{ c.website }}" target="_blank"
+                            style="color: var(--primary-color); text-decoration: none;">
+                            Visit &nearr;
+                        </a>
+                        {% else %}
+                        -
+                        {% endif %}
+                    </td>
+                    <td>
+                        <button
+                            onclick="openDeleteModal('{{ url_for('delete_company', company_id=c.id) }}', '{{ c.name }}')"
+                            style="background:none; border:none; cursor:pointer; color: var(--status-error-text); font-size: 1.2rem; line-height: 1;">
+                            &times;
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div style="padding: 3rem; text-align: center; color: var(--text-muted);">
+        <p style="margin-bottom: 1rem; font-size: 1.1rem;">No companies found matching your criteria.</p>
+        <a href="/pipeline" class="btn btn-primary">Start New Research</a>
+    </div>
+    {% endif %}
+</div>
+
+{% endblock %}

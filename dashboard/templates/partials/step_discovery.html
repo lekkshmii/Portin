@@ -1,0 +1,92 @@
+<div class="fade-in">
+    <div style="text-align: center; margin-bottom: 2rem;">
+        <h2 style="font-size: 1.5rem; font-weight: 600;">Discovery Setup</h2>
+        <div class="badge badge-success" style="margin-top: 0.5rem;">Session #{{ session_id }} Created</div>
+
+        <!-- Progress Bar (Step 2) -->
+        <div style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; opacity: 0.8;">
+            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
+            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
+            <div style="height: 4px; width: 40px; background: rgba(0,0,0,0.1); border-radius: 2px;"></div>
+        </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; max-width: 900px; margin: 0 auto;">
+
+        <!-- Criteria Summary -->
+        <div class="glass-panel" style="background: rgba(255,255,255,0.3); padding: 1.5rem; margin: 0;">
+            <h3
+                style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted); text-transform: uppercase;">
+                AI Analysis Summary
+            </h3>
+
+            <div style="font-size: 0.95rem;">
+                <p><strong>Keywords:</strong> {{ criteria.industry.keywords | join(', ') }}</p>
+                <p><strong>Revenue:</strong> ${{ criteria.revenue.revenue_min_millions }}M - ${{
+                    criteria.revenue.revenue_max_millions }}M</p>
+                <p><strong>Locations:</strong>
+                    {% if criteria.geography.regions %}
+                    {{ criteria.geography.regions | join(', ') }}
+                    {% else %}
+                    Global
+                    {% endif %}
+                </p>
+                {% if criteria.industry.reference_companies %}
+                <p><strong>References:</strong> {{ criteria.industry.reference_companies | join(', ') }}</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Engine Selection -->
+        <form hx-post="/pipeline/start-discovery" hx-target="#pipeline-content" hx-swap="innerHTML">
+            <input type="hidden" name="session_id" value="{{ session_id }}">
+
+            <h3
+                style="font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--text-muted); text-transform: uppercase;">
+                Select Search Engine
+            </h3>
+
+            <div style="display: grid; gap: 1rem;">
+                <label
+                    style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer;">
+                    <input type="radio" name="engine" value="grounding" checked style="margin-top: 0.25rem;">
+                    <div>
+                        <div style="font-weight: 600;">Google Grounding (Active Search)</div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">Uses Gemini's real-time web search.
+                            Best for finding companies described by concept rather than keyword.</div>
+                        <div class="badge badge-success" style="margin-top: 0.5rem; font-size: 0.7rem;">Recommended
+                        </div>
+                    </div>
+                </label>
+
+                <label
+                    style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer;">
+                    <input type="radio" name="engine" value="serper">
+                    <div>
+                        <div style="font-weight: 600;">Google (Serper API)</div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">Standard Google Search. Good for
+                            specific keywords.</div>
+                    </div>
+                </label>
+
+                <label
+                    style="display: flex; align-items: flex-start; gap: 1rem; padding: 1rem; background: #fff; border-radius: 12px; border: 1px solid var(--glass-border); cursor: pointer;">
+                    <input type="radio" name="engine" value="duckduckgo">
+                    <div>
+                        <div style="font-weight: 600;">DuckDuckGo</div>
+                        <div style="font-size: 0.85rem; color: var(--text-muted);">Privacy-focused, often yields
+                            different results.</div>
+                    </div>
+                </label>
+            </div>
+
+            <button type="submit" class="btn btn-primary"
+                style="width: 100%; margin-top: 2rem; padding: 1rem; justify-content: center;">
+                Start Discovery &rarr;
+            </button>
+            <div class="htmx-indicator" style="text-align: center; margin-top: 1rem;">
+                Starting engine...
+            </div>
+        </form>
+    </div>
+</div>

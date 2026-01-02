@@ -4,9 +4,11 @@
 
 # Core
 google-generativeai
+google-genai
 requests
 openpyxl
 python-dotenv
+flask
 
 # Phase 1: Foundation
 pydantic>=2.0

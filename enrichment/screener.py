@@ -25,12 +25,20 @@ import google.generativeai as genai
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from dotenv import load_dotenv
+from config.model_config import get_current_model
+# NEW: Import Deep Research Module
+try:
+    from enrichment.deep_research import DeepResearchEnricher, EnrichedCompany
+    DEEP_RESEARCH_AVAILABLE = True
+except ImportError as e:
+    print(f"[WARNING] Deep Research module not found: {e}")
+    DEEP_RESEARCH_AVAILABLE = False
 
 load_dotenv()
 
 # Configure Gemini
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-model = genai.GenerativeModel('gemini-2.5-flash')
+model = genai.GenerativeModel(get_current_model())
 
 class MultiSourceEnricher:
     """
@@ -53,11 +61,17 @@ class MultiSourceEnricher:
         # Stats
         self.stats = {
             'gemini_calls': 0,
+            'grounding_calls': 0,
             'serper_calls': 0,
             'firecrawl_calls': 0,
             'crawl4ai_calls': 0,
             'http_calls': 0
         }
+        
+        # Deep Enricher lazy load or init
+        self.deep_enricher = None
+        if DEEP_RESEARCH_AVAILABLE:
+            self.deep_enricher = DeepResearchEnricher()
     
     def ask_scraper_preference(self):
         """Ask user which scraper to use for enrichment."""
@@ -151,7 +165,7 @@ class MultiSourceEnricher:
             
             if response.status_code == 200:
                 data = response.json()
-                return data.get('data', {}).get('markdown', '')[:3000]  # Limit to 3k chars
+                return data.get('data', {}).get('markdown', '')  # No limit for Deep Research
                 
         except Exception as e:
             print(f"   [WARNING] Firecrawl error: {e}")
@@ -170,7 +184,7 @@ class MultiSourceEnricher:
             
             if content:
                 self.stats['crawl4ai_calls'] += 1
-                return content[:3000]  # Limit to 3k chars
+                return content  # No limit for Deep Research
                 
         except Exception as e:
             print(f"   [WARNING] Crawl4AI error: {e}")
@@ -234,23 +248,47 @@ class MultiSourceEnricher:
                 text = re.sub(r'<[^>]+>', ' ', text)
                 # Clean up whitespace
                 text = ' '.join(text.split())
-                return text[:3000]
+                return text
                 
         except Exception as e:
             print(f"   [WARNING] HTTP error: {e}")
         
         return ""
     
-    def extract_with_gemini(self, company_name: str, website: str, context: str) -> Dict:
-        """Step 3: Use Gemini to extract structured data (250 req/day)"""
-        
+    def extract_with_gemini(self, company_name: str, website: str, context: str, search_criteria: Dict = None) -> Dict:
+        """Step 3: Use Gemini to extract structured data AND score based on real data (250 req/day)"""
+
         self._wait_for_gemini_rate_limit()
-        
-        prompt = f"""Extract M&A screening data for promotional products company.
+
+        # Get reference companies and criteria for scoring
+        ref_companies = ""
+        revenue_range = "$5M-$50M"
+        target_industry = "packaging"
+
+        if search_criteria:
+            refs = search_criteria.get('reference_companies', [])
+            if refs:
+                ref_companies = f"Reference companies to compare against: {', '.join(refs[:3])}"
+
+            rev = search_criteria.get('revenue', {})
+            rev_min = rev.get('revenue_min_millions', 5)
+            rev_max = rev.get('revenue_max_millions', 50)
+            revenue_range = f"${rev_min}M-${rev_max}M"
+
+            ind = search_criteria.get('industry', {})
+            industries = ind.get('industry', ['packaging'])
+            target_industry = ', '.join(industries[:3])
+
+        prompt = f"""Extract M&A screening data and SCORE this company based on REAL data.
 
 Company: {company_name}
 Website: {website}
-Additional Context: {context[:2000]}
+Additional Context: {context}
+
+TARGET CRITERIA:
+- Industry: {target_industry}
+- Target Revenue Range: {revenue_range}
+{ref_companies}
 
 IMPORTANT: You MUST respond with ONLY valid JSON. No markdown, no explanation, just JSON.
 
@@ -259,28 +297,61 @@ Return this EXACT structure:
   "name": "{company_name}",
   "website": "{website}",
   "year_established": <year as number or null>,
-  "revenue_estimate": "<format: '$25M' or '<$5M' or '$5-10M' or null>",
+  "revenue_estimate": "<format: '$25M' or '<$5M' or '$5-10M' or '>$1B' or 'unknown'>",
+  "employee_count": "<number or range like '50-200' or 'unknown'>",
   "line_of_business": "<B2B/B2C/Wholesale Distributor/etc>",
-  "core_categories": "<main products: apparel/drinkware/tech accessories/awards/signage/etc>",
+  "core_categories": "<main products>",
   "ownership": "<private/family-owned/PE-backed/public>",
   "sales_channel": "<online/retail/B2B distributors/hybrid>",
   "headquarters": "<city, state format>",
   "region": "US",
   "manufacturing": "<describe facilities or 'N/A' or 'unknown'>",
-  "employees": "<range like '50-200' or 'unknown'>",
   "synergies": "<2-3 bullet points on strategic fit>",
-  "priority": "<High if $5-50M revenue, Medium if <$5M or >$50M, Low otherwise>",
+  "fit_score": <0-100 based on REAL scoring rules below>,
+  "score_reason": "<1 sentence explaining score>",
+  "priority": "<High/Medium/Low based on fit_score>",
   "notes": "<any notable facts>",
   "status": "potential",
   "vendor_type": "potential"
 }}
 
-RULES:
-- Use "unknown" or "N/A" if data is missing
-- Be conservative with revenue estimates
-- Priority MUST be High/Medium/Low
-- Synergies should be SPECIFIC (e.g. "custom apparel decoration capabilities")
-- Keep all values concise
+SCORING RULES (use fit_score field):
+
+0-15: DISQUALIFIED
+- Revenue > $1B (Fortune 500, global leaders)
+- Public company with large market cap
+- Wrong industry entirely
+- Company no longer exists
+
+15-35: POOR FIT
+- Revenue $500M-$1B (too large)
+- Right industry but wrong business model
+- Has been acquired
+
+35-55: MODERATE FIT
+- Revenue unclear but seems mid-market
+- Right industry, uncertain size
+- Geography match unclear
+
+55-75: GOOD FIT
+- Revenue appears to be in target range
+- Matches industry and geography
+- Private/family-owned company
+
+75-90: EXCELLENT FIT
+- Revenue clearly in target range
+- Direct competitor to reference companies
+- Similar business model (e-commerce, custom, DTC)
+
+90-100: PERFECT FIT
+- Almost identical to reference companies
+- Confirmed revenue in range
+- Strong synergies identified
+
+Set priority based on fit_score:
+- High: fit_score >= 70
+- Medium: fit_score 40-69
+- Low: fit_score < 40
 
 JSON ONLY:"""
 
@@ -330,20 +401,20 @@ JSON ONLY:"""
             "vendor_type": "potential"
         }
     
-    def enrich_company(self, company_name: str) -> Dict:
+    def enrich_company(self, company_name: str, search_criteria: Dict = None) -> Dict:
         """Full enrichment pipeline with smart fallbacks"""
         print(f"\n🔍 Enriching: {company_name}")
-        
+
         # Step 1: Search for company
         search_data = self.search_company(company_name)
         website = search_data.get('website', '')
         snippet = search_data.get('snippet', '')
-        
+
         if website:
             print(f"   [OK] Found: {website}")
         else:
             print(f"   [WARNING] No website found via search")
-        
+
         # Step 2: Scrape website content (uses user's preferred scraper)
         content = ""
         if website:
@@ -351,13 +422,48 @@ JSON ONLY:"""
             content = self.scrape_website(website)
             if content:
                 print(f"   [OK] Got {len(content)} chars")
-        
+
         # Combine all context
         full_context = f"{snippet} {content}".strip()
+
+        # Step 3: Extract with Gemini AND score based on real data
+        company_data = {}
         
-        # Step 3: Extract with Gemini
-        print(f"   -> Porto extraction...")
-        company_data = self.extract_with_gemini(company_name, website, full_context)
+        # CHECK: Use Deep Research? (Default to True if available for this demo, or add a toggle)
+        use_deep = DEEP_RESEARCH_AVAILABLE # Can be toggled via search_criteria
+        
+        if use_deep and self.deep_enricher:
+            try:
+                print(f"   -> 🚀 Using DEEP RESEARCH Engine...")
+                # Pass initial context (snippet + home page scrape) to Deep Research
+                enriched_obj = self.deep_enricher.enrich_company(
+                    company_name=company_name, 
+                    domain=None, # Will be extracted if needed
+                    website=website,
+                    initial_context=full_context
+                )
+                
+                # Convert Pydantic to Dict for legacy compatibility
+                # We need to ensure the dict matches what the rest of the system expects
+                company_data = enriched_obj.model_dump()
+                
+                # Normalize keys if needed (e.g. map new fields to old ones if missing)
+                company_data['fit_score'] = company_data.get('ma_fit_score', 0)
+                company_data['priority'] = company_data.get('priority', 'Medium')
+                
+                # Flatten research metadata if needed for simple display
+                if company_data.get('research_metadata'):
+                    company_data['research_grade'] = company_data['research_metadata'].get('research_grade')
+                    company_data['hallucination_risk_score'] = company_data['research_metadata'].get('hallucination_risk_score')
+                    
+            except Exception as e:
+                print(f"   [ERROR] Deep Research failed: {e}. Falling back to standard extraction.")
+                print(f"   Traceback: {e}")
+                use_deep = False
+        
+        if not use_deep:
+            print(f"   -> Extracting & scoring (Standard Mode)...")
+            company_data = self.extract_with_gemini(company_name, website, full_context, search_criteria)
         
         # Step 4: Try SEC EDGAR for verified financials (US public companies)
         sec_data = self._try_sec_validation(company_name)
@@ -380,9 +486,12 @@ JSON ONLY:"""
         
         # Add source
         company_data['source'] = website or "Search required"
-        
-        print(f"   [SUCCESS] Complete - Priority: {company_data.get('priority', 'Unknown')}")
-        
+
+        # Show score in output
+        fit_score = company_data.get('fit_score', 'N/A')
+        priority = company_data.get('priority', 'Unknown')
+        print(f"   [SUCCESS] Complete - Score: {fit_score}/100, Priority: {priority}")
+
         return company_data
     
     def _try_sec_validation(self, company_name: str) -> Optional[Dict]:
@@ -398,21 +507,45 @@ def get_project_root():
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def create_professional_excel(companies: List[Dict], output_file: str = "MA_Screening_Demo.xlsx"):
-    """Create Excel matching their EXACT format with professional styling"""
+def create_professional_excel(
+    companies: List[Dict], 
+    industry: str = "Unknown",
+    reference_company: str = "",
+    session_id: int = 0
+):
+    """
+    Create Excel matching their EXACT format with professional styling.
+    Filename format: [industry]_[reference_company]_session[N].xlsx
+    """
     
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "M&A Target Screening"
     
-    # Exact headers from their Excel
+    # Sort companies by fit_score (highest first), handling None values
+    def safe_score(x):
+        score = x.get('fit_score')
+        if score is None:
+            return -1  # Sort None scores to the bottom
+        try:
+            return float(score)
+        except (ValueError, TypeError):
+            return -1
+    
+    companies = sorted(companies, key=safe_score, reverse=True)
+
+    # Headers with fit_score added
     headers = [
         "No.",
+        "Fit Score",
         "Source",
         "Name",
         "Website",
         "Year of Est.",
         "Size (Revenues USD mn)",
+        "Verified Revenue",  # NEW
+        "Research Grade",    # NEW
+        "Risk Score",        # NEW
         "LOB",
         "Core categories",
         "Ownership",
@@ -423,6 +556,7 @@ def create_professional_excel(companies: List[Dict], output_file: str = "MA_Scre
         "Employees",
         "Areas of Synergies",
         "Priority",
+        "Score Reason",
         "Notes",
         "Status",
         "Vendor"
@@ -454,11 +588,15 @@ def create_professional_excel(companies: List[Dict], output_file: str = "MA_Scre
         
         row_data = [
             idx,
+            to_excel_value(company.get('fit_score') or company.get('ma_fit_score', '')),
             to_excel_value(company.get('source', '')),
-            to_excel_value(company.get('name', '')),
+            to_excel_value(company.get('name') or company.get('company_name', '')),
             to_excel_value(company.get('website', '')),
             to_excel_value(company.get('year_established', '')),
             to_excel_value(company.get('revenue_estimate', '')),
+            to_excel_value(company.get('revenue_verified', company.get('verified_revenue', ''))), # NEW
+            to_excel_value(company.get('research_grade', 'N/A')), # NEW
+            to_excel_value(company.get('hallucination_risk_score', '')), # NEW
             to_excel_value(company.get('line_of_business', '')),
             to_excel_value(company.get('core_categories', '')),
             to_excel_value(company.get('ownership', '')),
@@ -466,9 +604,10 @@ def create_professional_excel(companies: List[Dict], output_file: str = "MA_Scre
             to_excel_value(company.get('headquarters', '')),
             to_excel_value(company.get('region', 'US')),
             to_excel_value(company.get('manufacturing', '')),
-            to_excel_value(company.get('employees', '')),
+            to_excel_value(company.get('employee_count', company.get('employees', ''))),
             to_excel_value(company.get('synergies', '')),
             to_excel_value(company.get('priority', 'Medium')),
+            to_excel_value(company.get('score_reason', '')),
             to_excel_value(company.get('notes', '')),
             to_excel_value(company.get('status', 'potential')),
             to_excel_value(company.get('vendor_type', 'potential'))
@@ -485,46 +624,70 @@ def create_professional_excel(companies: List[Dict], output_file: str = "MA_Scre
         
         row_num = idx + 1
         
-        # Color the priority cell
+        # Color the priority cell (column 17 now)
         if priority in priority_colors:
-            priority_cell = ws.cell(row=row_num, column=16)
+            priority_cell = ws.cell(row=row_num, column=17)
             priority_cell.fill = PatternFill(
                 start_color=priority_colors[priority],
                 end_color=priority_colors[priority],
                 fill_type="solid"
             )
             priority_cell.font = Font(bold=True)
-        
+
+        # Color fit_score cell based on score (column 2)
+        fit_score = company.get('fit_score') or company.get('ma_fit_score')
+        if fit_score is None:
+            fit_score = 0
+        # Ensure fit_score is numeric for comparison
+        try:
+            fit_score = float(fit_score)
+        except (TypeError, ValueError):
+            fit_score = 0
+        score_cell = ws.cell(row=row_num, column=2)
+        if fit_score >= 70:
+            score_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+        elif fit_score >= 40:
+            score_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+        else:
+            score_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+        score_cell.font = Font(bold=True)
+
         # Light alternating row colors for readability
         if idx % 2 == 0:
-            for col in range(1, 20):
-                ws.cell(row=row_num, column=col).fill = PatternFill(
-                    start_color="F2F2F2",
-                    end_color="F2F2F2",
-                    fill_type="solid"
-                )
+            for col in range(1, 25): # Increased column count
+                if col not in [2, 17]:  # Skip score and priority cells
+                    ws.cell(row=row_num, column=col).fill = PatternFill(
+                        start_color="F2F2F2",
+                        end_color="F2F2F2",
+                        fill_type="solid"
+                    )
     
     # Auto-size columns
     column_widths = {
         'A': 6,   # No.
-        'B': 45,  # Source
-        'C': 25,  # Name
-        'D': 35,  # Website
-        'E': 12,  # Year
-        'F': 20,  # Revenue
-        'G': 20,  # LOB
-        'H': 30,  # Core categories
-        'I': 18,  # Ownership
-        'J': 18,  # Sales channel
-        'K': 25,  # HQ
-        'L': 10,  # Region
-        'M': 30,  # Manufacturing
-        'N': 15,  # Employees
-        'O': 40,  # Synergies
-        'P': 12,  # Priority
-        'Q': 40,  # Notes
-        'R': 12,  # Status
-        'S': 12   # Vendor
+        'B': 10,  # Fit Score
+        'C': 45,  # Source
+        'D': 25,  # Name
+        'E': 35,  # Website
+        'F': 12,  # Year
+        'G': 20,  # Revenue
+        'H': 20,  # LOB
+        'I': 30,  # Core categories
+        'J': 18,  # Ownership
+        'K': 18,  # Sales channel
+        'L': 25,  # HQ
+        'M': 10,  # Region
+        'N': 30,  # Manufacturing
+        'O': 15,  # Employees
+        'P': 40,  # Synergies
+        'Q': 12,  # Priority
+        'R': 45,  # Score Reason
+        'S': 40,  # Notes
+        'T': 12,  # Status
+        'U': 12,  # Vendor
+        'V': 15,  # Verified Revenue
+        'W': 10,  # Grade
+        'X': 10   # Risk
     }
     
     for col_letter, width in column_widths.items():
@@ -538,6 +701,16 @@ def create_professional_excel(companies: List[Dict], output_file: str = "MA_Scre
     exports_dir = os.path.join(project_root, 'exports')
     os.makedirs(exports_dir, exist_ok=True)
     
+    # Generate dynamic filename: [industry]_[reference_company]_session[N].xlsx
+    import re
+    def sanitize_name(name):
+        return re.sub(r'[^\w\s-]', '', name).strip().replace(' ', '_')[:30]
+    
+    industry_safe = sanitize_name(industry) if industry else "Unknown"
+    ref_safe = sanitize_name(reference_company) if reference_company else "NoRef"
+    session_str = f"session{session_id}" if session_id else "all"
+    
+    output_file = f"{industry_safe}_{ref_safe}_{session_str}.xlsx"
     output_path = os.path.join(exports_dir, output_file)
     
     # Save
@@ -577,6 +750,11 @@ def main():
     # ─────────────────────────────────────────────────────────────
     target_companies = []
     company_data_map = {}  # name -> full company data
+    
+    # Track session metadata for Excel filename
+    selected_session_id = None
+    selected_industry = "Unknown"
+    selected_reference = ""
     
     try:
         from data.db import get_db_connection, get_database_stats, get_all_sessions, get_companies_by_session, DB_PATH
@@ -632,11 +810,13 @@ def main():
                     elif session_idx == len(sessions) + 1:
                         # Latest session
                         selected_session_id = sessions[0]['id']
-                        print(f"\n[OK] Using latest session #{selected_session_id} - {sessions[0]['industry']}")
+                        selected_industry = sessions[0].get('industry', 'Unknown')
+                        print(f"\n[OK] Using latest session #{selected_session_id} - {selected_industry}")
                     elif 0 <= session_idx < len(sessions):
                         # Specific session
                         selected_session_id = sessions[session_idx]['id']
-                        print(f"\n[OK] Using session #{selected_session_id} - {sessions[session_idx]['industry']}")
+                        selected_industry = sessions[session_idx].get('industry', 'Unknown')
+                        print(f"\n[OK] Using session #{selected_session_id} - {selected_industry}")
                     else:
                         selected_session_id = None
                         print("\n[WARNING] Invalid, using all sessions")
@@ -773,19 +953,41 @@ def main():
             return
     
     print(f"[INFO] Processing {len(target_companies)} companies...\n")
-    
+
+    # Load search criteria for proper scoring
+    search_criteria = None
+    criteria_path = os.path.join(get_project_root(), 'output', 'search_criteria.json')
+    if os.path.exists(criteria_path):
+        try:
+            with open(criteria_path, 'r') as f:
+                data = json.load(f)
+                search_criteria = data.get('criteria', {})
+                refs = search_criteria.get('reference_companies', [])
+                if refs:
+                    selected_reference = refs[0] if refs else ""
+                    print(f"[INFO] Scoring against reference companies: {', '.join(refs[:3])}")
+                
+                # Get industry from criteria if not already set
+                if selected_industry == "Unknown":
+                    ind = search_criteria.get('industry', {})
+                    industries = ind.get('industry', [])
+                    if industries:
+                        selected_industry = industries[0]
+        except Exception as e:
+            print(f"[WARNING] Could not load search criteria: {e}")
+
     enricher = MultiSourceEnricher()
-    
+
     # Ask user which scraper to use
     enricher.ask_scraper_preference()
-    
+
     enriched_companies = []
-    
+
     start_time = time.time()
-    
+
     for company_name in target_companies:
         try:
-            company_data = enricher.enrich_company(company_name)
+            company_data = enricher.enrich_company(company_name, search_criteria)
             if company_data:
                 enriched_companies.append(company_data)
         except Exception as e:
@@ -808,7 +1010,10 @@ def main():
                 
                 for company in enriched_companies:
                     try:
-                        name = company.get('company', '')
+                        # Handle different key names from different enrichment sources:
+                        # - extract_with_gemini uses 'name'
+                        # - Deep Research (EnrichedCompany) uses 'company_name'
+                        name = company.get('name') or company.get('company_name') or company.get('company', '')
                         enriched_json = json.dumps(company)
                         
                         # Update company with enriched data and change status
@@ -833,7 +1038,12 @@ def main():
     
     # Create Excel
     print(f"\n[INFO] Creating Excel file...")
-    create_professional_excel(enriched_companies)
+    create_professional_excel(
+        enriched_companies,
+        industry=selected_industry,
+        reference_company=selected_reference,
+        session_id=selected_session_id or 0
+    )
     
     # Summary
     print("\n" + "=" * 80)
@@ -856,7 +1066,14 @@ def main():
         print(f"   {priority}: {count} companies")
     
     print()
-    print(" API Usage (All FREE):")
+    print(" API Usage (LOCAL):")
+    
+    # Aggregate stats from deep enricher if used
+    if enricher.deep_enricher:
+        deep_stats = enricher.deep_enricher.get_stats()
+        enricher.stats['grounding_calls'] += deep_stats.get('grounding_calls', 0)
+        enricher.stats['gemini_calls'] += deep_stats.get('gemini_calls', 0)
+    
     for service, count in enricher.stats.items():
         print(f"   {service}: {count} calls")
     
@@ -865,7 +1082,7 @@ def main():
     print()
     print("=" * 80)
     print(" Enrichment complete!")
-    print(" - Excel: exports/MA_Screening_Demo.xlsx")
+    print(f" - Excel: exports/{selected_industry}_{selected_reference}_session{selected_session_id or 0}.xlsx")
     print(" - Database: All companies marked as 'enriched'")
     print("=" * 80)
 
