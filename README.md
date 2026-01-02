@@ -32,37 +32,80 @@
 
 ## Quick Start
 
-### 1. Clone & Install
+### Option A: Automated Setup (Recommended for Beginners)
+
+**Windows:**
+```bash
+# Double-click setup.bat or run:
+setup.bat
+```
+
+**Mac/Linux:**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+Then:
+1. Copy `.env.example` to `.env`
+2. Add your Gemini API key
+3. Run the dashboard:
+   ```bash
+   python run.py
+   ```
+4. Open http://localhost:5000
+
+### Option B: Manual Setup
 
 ```bash
 git clone https://github.com/yourusername/portin.git
 cd portin
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Mac/Linux
+
+# Install dependencies
 pip install -r requirements.txt
-playwright install chromium  # For Crawl4AI
-```
+playwright install chromium
 
-### 2. Set Up API Keys
-
-Copy the example environment file and add your keys:
-
-```bash
+# Configure API keys
 cp .env.example .env
+# Edit .env with your keys
+
+# Start dashboard
+python run.py
 ```
 
-Edit `.env` with your API keys (see `.env.example` for details).
+Open http://localhost:5000
 
-### 3. Run the Pipeline
+### Need Help?
+
+See **[SETUP.md](SETUP.md)** for detailed step-by-step instructions.
+
+---
+
+## Using Porto
+
+### Dashboard (Recommended)
+
+The modern web interface with real-time updates:
 
 ```bash
-# Step 1: Define your search criteria
-python run_intake.py
-
-# Step 2: Discover companies
-python run_discovery.py
-
-# Step 3: Enrich with detailed data
-python run_enrichment.py
+python run.py
 ```
+
+Then go to http://localhost:5000
+
+Features:
+- Interactive search criteria builder
+- Real-time discovery progress
+- Clean glassmorphism UI
+- Session management
+- CSV export
+
+### CLI (Advanced)
 
 Or run all at once:
 
