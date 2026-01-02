@@ -29,6 +29,7 @@ def check_requirements():
         # Fallback to manual check if requirements.txt is missing
         required = {
             'google-generativeai': 'google.generativeai',
+            'google-genai': 'google.genai',
             'requests': 'requests',
             'openpyxl': 'openpyxl',
             'python-dotenv': 'dotenv'
@@ -146,6 +147,10 @@ def main():
     
     if not check_api_keys():
         return
+    
+    # Model selection
+    from config.model_config import ask_model_preference
+    ask_model_preference()
     
     input("Press ENTER to start the pipeline... ")
     

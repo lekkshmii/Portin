@@ -21,6 +21,7 @@ TRACKER.md
 ma-screener-blueprint.md
 implementation_plan.md
 .agent/
+.claude/
 
 # ─────────────────────────────────────────────────────────────────────
 # DATABASE & CACHE

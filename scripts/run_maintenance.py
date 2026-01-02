@@ -15,6 +15,7 @@ import time
 from typing import List, Dict, Optional
 import google.generativeai as genai
 from dotenv import load_dotenv
+from config.model_config import get_current_model
 
 load_dotenv()
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
@@ -24,7 +25,7 @@ class DatabaseMaintenance:
     """Utility for maintaining and updating company database."""
     
     def __init__(self):
-        self.gemini = genai.GenerativeModel('gemini-2.5-flash')
+        self.gemini = genai.GenerativeModel(get_current_model())
         self.last_call = 0
         self.min_interval = 3  # seconds between Gemini calls
     

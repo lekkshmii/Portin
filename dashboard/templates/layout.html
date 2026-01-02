@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Portin Dashboard{% endblock %}</title>
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="glass-panel"
+            style="padding: 1rem 2rem; display: flex; align-items: center; justify-content: space-between; margin-bottom: 2rem;">
+            <div class="logo-area">
+                <div class="logo-text">
+                    <h1>Portin</h1>
+                    <p>M&A Research Intelligence</p>
+                </div>
+            </div>
+
+            <nav>
+                <a href="/" class="{% if request.path == '/' %}active{% endif %}">Dashboard</a>
+                <a href="/pipeline" class="{% if request.path == '/pipeline' %}active{% endif %}">Pipeline</a>
+                <a href="/discovery" class="{% if request.path == '/discovery' %}active{% endif %}">Discovery</a>
+                <a href="/settings" class="{% if request.path == '/settings' %}active{% endif %}">Settings</a>
+            </nav>
+        </header>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="glass-panel fade-in" style="padding: 1rem; margin-bottom: 1.5rem;">
+            {% for category, message in messages %}
+            <div class="badge badge-{{ category }}"
+                style="display: block; margin-bottom: 0.5rem; padding: 0.5rem 1rem;">
+                {{ message }}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endwith %}
+
+        <!-- Main Content -->
+        <main class="fade-in">
+            {% block content %}{% endblock %}
+        </main>
+
+        <!-- Footer -->
+        <footer style="margin-top: 3rem; text-align: center; color: var(--text-muted); font-size: 0.9rem;">
+            <p>&copy; 2026 Portin AI. All rights reserved.</p>
+        </footer>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="modal-overlay">
+        <div class="modal-content">
+            <h3 id="modalTitle" class="modal-title">Confirm Action</h3>
+            <p id="modalMessage" class="modal-message">Are you sure?</p>
+
+            <div id="modalInputGroup" class="modal-input-group">
+                <label>Type "YES" to confirm:</label>
+                <input type="text" id="confirmInput" placeholder="YES" onkeyup="checkConfirmInput()">
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <a id="confirmBtn" href="#" class="btn btn-danger">Confirm</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script>
+        // Modal Logic
+        const modal = document.getElementById('confirmModal');
+        const modalTitle = document.getElementById('modalTitle');
+        const modalMessage = document.getElementById('modalMessage');
+        const modalInputGroup = document.getElementById('modalInputGroup');
+        const confirmInput = document.getElementById('confirmInput');
+        const confirmBtn = document.getElementById('confirmBtn');
+        let currentActionUrl = '#';
+
+        function openConfirm(url, title = 'Confirm Action', message = 'Are you sure?') {
+            currentActionUrl = url;
+            modalTitle.textContent = title;
+            modalMessage.textContent = message;
+
+            // Simple confirm - no input needed
+            modalInputGroup.classList.remove('active');
+            confirmBtn.href = url;
+            confirmBtn.classList.remove('disabled');
+            confirmBtn.style.pointerEvents = 'auto';
+            confirmBtn.style.opacity = '1';
+
+            modal.classList.add('active');
+        }
+
+        function openDeleteModal(url, itemName) {
+            currentActionUrl = url;
+            modalTitle.textContent = 'Delete Confirmation';
+            modalMessage.textContent = `Are you sure you want to delete "${itemName}"? This cannot be undone.`;
+
+            // Input needed
+            modalInputGroup.classList.add('active');
+            confirmInput.value = '';
+            confirmBtn.href = '#'; // Disable link initially
+            confirmBtn.style.pointerEvents = 'none';
+            confirmBtn.style.opacity = '0.5';
+
+            modal.classList.add('active');
+            confirmInput.focus();
+        }
+
+        function checkConfirmInput() {
+            if (confirmInput.value === 'YES') {
+                confirmBtn.href = currentActionUrl;
+                confirmBtn.style.pointerEvents = 'auto';
+                confirmBtn.style.opacity = '1';
+            } else {
+                confirmBtn.href = '#';
+                confirmBtn.style.pointerEvents = 'none';
+                confirmBtn.style.opacity = '0.5';
+            }
+        }
+
+        function closeModal() {
+            modal.classList.remove('active');
+        }
+
+        // Close on outside click
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) closeModal();
+        });
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+
+</html>

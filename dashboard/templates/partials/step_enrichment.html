@@ -1,0 +1,34 @@
+<div class="fade-in">
+    <div style="text-align: center; margin-bottom: 2rem;">
+        <h2 style="font-size: 1.5rem; font-weight: 600;">Discovery Complete!</h2>
+        <div class="badge badge-success" style="margin-top: 0.5rem;">Session #{{ session_id }} Ready</div>
+
+        <!-- Progress Bar (Full) -->
+        <div style="display: flex; gap: 0.5rem; justify-content: center; margin-top: 1rem; opacity: 0.8;">
+            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
+            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
+            <div style="height: 4px; width: 40px; background: var(--primary-color); border-radius: 2px;"></div>
+        </div>
+    </div>
+
+    <div class="glass-panel" style="max-width: 600px; margin: 0 auto; text-align: center;">
+        <h3 style="margin-bottom: 1rem;">Verify Results</h3>
+
+        <div class="stat-value" style="color: var(--primary-color); font-size: 3rem; margin-bottom: 0.5rem;">
+            {{ companies_count }}
+        </div>
+        <p style="color: var(--text-muted); margin-bottom: 2rem;">Companies Discovered</p>
+
+        <div style="display: flex; gap: 1rem; justify-content: center;">
+            <a href="/?session={{ session_id }}" class="btn btn-secondary">
+                View Results
+            </a>
+            <a href="/?session={{ session_id }}" class="btn btn-primary">
+                Proceed top Enrichment &rarr;
+            </a>
+        </div>
+        <p style="margin-top: 1rem; font-size: 0.85rem; color: var(--text-muted);">
+            (Enrichment UI coming in Phase 3 - For now, view results in dashboard)
+        </p>
+    </div>
+</div>

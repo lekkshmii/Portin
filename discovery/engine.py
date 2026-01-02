@@ -20,6 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 import google.generativeai as genai
 from dotenv import load_dotenv
+from config.model_config import get_current_model
 
 load_dotenv()
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
@@ -32,7 +33,7 @@ class AggressiveDiscoveryEngine:
     
     def __init__(self, criteria: Dict):
         self.criteria = criteria
-        self.gemini = genai.GenerativeModel('gemini-2.5-flash')
+        self.gemini = genai.GenerativeModel(get_current_model())
         
         # API keys
         self.serper_key = os.getenv('SERPER_KEY')
@@ -61,33 +62,59 @@ class AggressiveDiscoveryEngine:
         
         # Scraped URLs cache (to avoid re-scraping)
         self._scraped_urls = set()
+        
+        # Reference company profiles (populated by profiling step)
+        self.reference_profiles = []
+        self.enhanced_keywords = []
+
+        # Log callback (for dashboard streaming)
+        self.log_callback = None
     
+    def log(self, message: str):
+        """Log message to stdout and optional callback."""
+        print(message)
+        if self.log_callback:
+            try:
+                self.log_callback(message)
+            except:
+                pass
+
     def ask_search_preference(self):
         """Ask user which search engine to use."""
+        # Non-blocking check for dashboard/CLI pre-config
+        if self.search_engine:
+            self.log(f"[INFO] Using pre-configured search engine: {self.search_engine}")
+            return
+
         print("\n" + "─"*50)
         print("SEARCH ENGINE SELECTION")
         print("─"*50)
         print("\n[1] Google (via Serper API) - Better results, uses API quota")
         print("[2] DuckDuckGo - Free, no API key needed, slightly less results")
-        print("[3] Both - Try Google first, fallback to DDG if quota exceeded\n")
-        
+        print("[3] Both - Try Google first, fallback to DDG if quota exceeded")
+        print("[4] Google Grounding - Uses Gemini's real-time web search (FREE until Jan 2026)\n")
+
         while True:
-            choice = input("Select search engine [1/2/3]: ").strip()
-            
+            choice = input("Select search engine [1/2/3/4]: ").strip()
+
             if choice == "1":
                 self.search_engine = "google"
-                print("\n[INFO] Using Google (Serper API)\n")
+                self.log("\n[INFO] Using Google (Serper API)\n")
                 return
             elif choice == "2":
                 self.search_engine = "duckduckgo"
-                print("\n[INFO] Using DuckDuckGo (Free)\n")
+                self.log("\n[INFO] Using DuckDuckGo (Free)\n")
                 return
             elif choice == "3":
                 self.search_engine = "both"
-                print("\n[INFO] Using Google with DuckDuckGo fallback\n")
+                self.log("\n[INFO] Using Google with DuckDuckGo fallback\n")
+                return
+            elif choice == "4":
+                self.search_engine = "grounding"
+                self.log("\n[INFO] Using Google Grounding (Gemini real-time search)\n")
                 return
             else:
-                print("[ERROR] Please enter 1, 2, or 3")
+                print("[ERROR] Please enter 1, 2, 3, or 4")
     
     def discover_all_sources(self) -> List[Dict]:
         """
@@ -98,7 +125,12 @@ class AggressiveDiscoveryEngine:
         if self.search_engine is None:
             self.ask_search_preference()
         
-        print("[INFO] Starting multi-source discovery...\n")
+        # Profile reference companies first (if any)
+        reference_companies = self.criteria.get('reference_companies', [])
+        if reference_companies:
+            self._profile_reference_companies(reference_companies)
+        
+        self.log("[INFO] Starting multi-source discovery...\n")
         
         # Initialize database session
         self._init_database_session()
@@ -118,25 +150,31 @@ class AggressiveDiscoveryEngine:
         elif self.search_engine == "both":
             if 'google_directories' in available_sources:
                 available_sources.append('duckduckgo')  # As fallback
-        
-        print(f"Available sources: {', '.join(available_sources)}\n")
+        elif self.search_engine == "grounding":
+            # Use Google Grounding instead of Serper
+            available_sources = [s for s in available_sources if s != 'google_directories']
+            available_sources.append('google_grounding')
+
+        self.log(f"Available sources: {', '.join(available_sources)}\n")
         
         # Run sources in parallel
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {}
-            
-            if 'google_directories' in available_sources and self.search_engine != "duckduckgo":
+
+            if 'google_grounding' in available_sources:
+                futures[executor.submit(self.discover_via_google_grounding)] = 'Google Grounding'
+            elif 'google_directories' in available_sources and self.search_engine != "duckduckgo":
                 futures[executor.submit(self.discover_via_google)] = 'Google Directories'
-            
+
             if 'duckduckgo' in available_sources or self.search_engine == "duckduckgo":
                 futures[executor.submit(self.discover_via_duckduckgo)] = 'DuckDuckGo'
-            
+
             if 'sec_edgar' in available_sources:
                 futures[executor.submit(self.discover_via_sec_edgar)] = 'SEC EDGAR'
-            
+
             if 'opencorporates' in available_sources:
                 futures[executor.submit(self.discover_via_opencorporates)] = 'OpenCorporates'
-            
+
             if 'apollo' in available_sources:
                 futures[executor.submit(self.discover_via_apollo)] = 'Apollo.io'
             
@@ -165,6 +203,39 @@ class AggressiveDiscoveryEngine:
         self.save_results(scored_companies)
         
         return scored_companies
+    
+    def _profile_reference_companies(self, reference_companies: List[str]):
+        """
+        Profile reference companies to extract keywords for better searches.
+        This step researches the reference companies using Grounding + Crawl4AI.
+        """
+        print("\n" + "="*60)
+        print(" REFERENCE COMPANY PROFILING")
+        print("="*60)
+        print(f"\nResearching {len(reference_companies)} reference company(s) to understand")
+        print("their products, industry focus, and keywords...\n")
+        
+        try:
+            from sources.reference_profiler import ReferenceProfiler, extract_search_keywords
+            
+            profiler = ReferenceProfiler()
+            self.reference_profiles = profiler.profile_multiple(reference_companies[:3])
+            
+            # Extract enhanced keywords from profiles
+            self.enhanced_keywords = extract_search_keywords(self.reference_profiles)
+            
+            if self.enhanced_keywords:
+                print(f"\n   [SUCCESS] Extracted {len(self.enhanced_keywords)} enhanced keywords:")
+                for kw in self.enhanced_keywords[:8]:
+                    print(f"      - {kw}")
+                if len(self.enhanced_keywords) > 8:
+                    print(f"      ... and {len(self.enhanced_keywords) - 8} more")
+            
+            print("\n" + "="*60 + "\n")
+            
+        except Exception as e:
+            print(f"[WARNING] Reference profiling failed: {e}")
+            print("Continuing with standard discovery...\n")
     
     def check_available_sources(self) -> List[str]:
         """
@@ -322,14 +393,91 @@ class AggressiveDiscoveryEngine:
                 return False
         
         return True
-    
+
+    def discover_via_google_grounding(self) -> List[Dict]:
+        """
+        Discover companies using Gemini's Google Grounding feature.
+        This uses real-time web search through Gemini API.
+        FREE until January 5, 2026.
+        """
+
+        print("\n[INFO] Searching with Google Grounding (Gemini real-time search)...\n")
+
+        try:
+            from sources.google_grounding import (
+                search_competitors_grounded,
+                search_industry_companies_grounded,
+                check_google_grounding_available
+            )
+        except ImportError as e:
+            self.log(f"[ERROR] google_grounding module not found: {e}")
+            return []
+
+        if not check_google_grounding_available():
+            self.log("[ERROR] Google Grounding requires GEMINI_API_KEY")
+            return []
+
+        companies = []
+
+        # Get criteria
+        reference_companies = self.criteria.get('reference_companies', [])
+        industry = self.criteria.get('industry', {})
+        industries = industry.get('industry', [])
+        keywords = industry.get('keywords', [])
+        geography = self.criteria.get('geography', {})
+        regions = geography.get('regions', ['USA'])
+
+        main_industry = industries[0] if industries else "company"
+        
+        # Use enhanced keywords from profiling if available
+        if self.enhanced_keywords:
+            keywords = list(set(keywords + self.enhanced_keywords))
+            print(f"   [Enhanced] Using {len(self.enhanced_keywords)} keywords from reference profiling")
+
+        # Phase 1: Search for competitors of reference companies
+        if reference_companies:
+            self.log(f"   [Phase 1] Searching competitors of: {', '.join(reference_companies[:3])}")
+            competitor_results = search_competitors_grounded(
+                reference_companies=reference_companies[:3],
+                industry=main_industry,
+                geography=regions,
+                logger=self.log
+            )
+            companies.extend(competitor_results)
+            self.log(f"   Found {len(competitor_results)} from competitor search")
+            time.sleep(2)
+
+        # Phase 2: Search for industry companies
+        self.log(f"   [Phase 2] Searching {main_industry} companies in {regions[0] if regions else 'USA'}...")
+        industry_results = search_industry_companies_grounded(
+            industry=main_industry,
+            keywords=keywords[:5],
+            geography=regions,
+            size_preference="mid-market",
+            logger=self.log
+        )
+        companies.extend(industry_results)
+        self.log(f"   Found {len(industry_results)} from industry search")
+
+        # Deduplicate
+        seen_names = set()
+        unique_companies = []
+        for c in companies:
+            name_lower = c.get('name', '').lower().strip()
+            if name_lower and name_lower not in seen_names:
+                seen_names.add(name_lower)
+                unique_companies.append(c)
+
+        print(f"\n   [Grounding] Total unique companies: {len(unique_companies)}")
+        return unique_companies
+
     def discover_via_sec_edgar(self) -> List[Dict]:
         """
         Discover US public companies via SEC EDGAR (FREE).
         Uses bulk data + Gemini filtering for fast, smart results.
         """
         
-        print("\n[INFO] Searching SEC EDGAR for US public companies...\n")
+        self.log("\n[INFO] Searching SEC EDGAR for US public companies...\n")
         
         try:
             from sources.sec_edgar import SECEdgarSearch
@@ -371,7 +519,7 @@ class AggressiveDiscoveryEngine:
             except Exception as e:
                 print(f"      SEC search error: {e}")
         
-        print(f"\n   SEC EDGAR found {len(companies)} public companies")
+        self.log(f"\n   SEC EDGAR found {len(companies)} public companies")
         return companies
     
     def discover_via_opencorporates(self) -> List[Dict]:
@@ -380,7 +528,7 @@ class AggressiveDiscoveryEngine:
         Searches by industry keywords in US and UK jurisdictions.
         """
         
-        print("\n[INFO] Searching OpenCorporates for company registry data...\n")
+        self.log("\n[INFO] Searching OpenCorporates for company registry data...\n")
         
         try:
             from sources.opencorporates import OpenCorporatesSearch
@@ -432,7 +580,7 @@ class AggressiveDiscoveryEngine:
                 seen_names.add(name_lower)
                 unique_companies.append(c)
         
-        print(f"\n   OpenCorporates found {len(unique_companies)} companies")
+        self.log(f"\n   OpenCorporates found {len(unique_companies)} companies")
         return unique_companies
     
     def generate_search_queries(self) -> List[str]:
@@ -450,47 +598,43 @@ class AggressiveDiscoveryEngine:
         geography = self.criteria.get('geography', {})
         regions = geography.get('regions', ['USA', 'United States'])
         countries = geography.get('countries', ['US'])
-        
-        ref_company = reference_companies[0] if reference_companies else ""
+
         main_industry = industries[0] if industries else "company"
-        
+
         queries = []
-        
+
         # ─────────────────────────────────────────────────────────────
         # PHASE 1: Reference Company Competitors (HIGH VALUE)
+        # Generate queries for ALL reference companies, not just the first
         # ─────────────────────────────────────────────────────────────
-        if ref_company:
+        for ref_company in reference_companies[:5]:  # Use up to 5 reference companies
             # Direct competitor queries
             queries.extend([
                 f'"{ref_company}" competitors',
                 f'"{ref_company}" top competitors',
-                f'"{ref_company}" main competitors',
-                f'"{ref_company}" biggest competitors',
-                f'top 10 {ref_company} competitors',
-                f'who competes with {ref_company}',
-                f'{ref_company} competitor analysis',
-                f'{ref_company} competitive landscape',
-            ])
-            
-            # Alternative/similar queries
-            queries.extend([
                 f'companies like "{ref_company}"',
                 f'companies similar to {ref_company}',
                 f'"{ref_company}" alternatives',
                 f'best alternatives to {ref_company}',
                 f'{ref_company} vs',
-                f'{ref_company} vs competitors',
             ])
-            
+
             # Industry-specific competitor queries
             for region in regions[:2]:
                 queries.extend([
                     f'best {main_industry} companies similar to {ref_company}',
                     f'competitors of {ref_company} {region}',
-                    f'top {ref_company} alternatives {region}',
                     f'{ref_company} competitors {region}',
-                    f'{main_industry} competitors to {ref_company}',
                 ])
+
+        # Cross-reference queries (if multiple reference companies)
+        if len(reference_companies) >= 2:
+            ref1, ref2 = reference_companies[0], reference_companies[1]
+            queries.extend([
+                f'{ref1} vs {ref2} competitors',
+                f'companies like {ref1} and {ref2}',
+                f'{ref1} {ref2} alternatives',
+            ])
         
         # ─────────────────────────────────────────────────────────────
         # PHASE 2: Industry + Region Combinations (COMPREHENSIVE)
@@ -562,36 +706,28 @@ class AggressiveDiscoveryEngine:
         
         # ─────────────────────────────────────────────────────────────
         # PHASE 8: Competitor-Focused Queries (DEDICATED)
+        # Use all reference companies for comprehensive competitor discovery
         # ─────────────────────────────────────────────────────────────
-        if ref_company:
+        for ref_company in reference_companies[:3]:  # Top 3 reference companies
             # Top competitors queries
             queries.extend([
                 f'top {ref_company} competitors',
                 f'{ref_company} biggest competitors',
-                f'{ref_company} main competitors',
-                f'top 5 {ref_company} competitors',
                 f'top 10 {ref_company} competitors',
                 f'{ref_company} competitor list',
-                f'{ref_company} competitor companies',
             ])
-            
+
             # Analysis/comparison queries
             queries.extend([
                 f'{ref_company} competitor analysis',
-                f'{ref_company} competitive analysis',
-                f'{ref_company} market competitors',
-                f'{ref_company} industry competitors',
                 f'who competes with {ref_company}',
                 f'{ref_company} competition',
             ])
-            
+
             # Vs queries (often yield competitor lists)
             queries.extend([
                 f'{ref_company} vs',
-                f'{ref_company} versus',
-                f'{ref_company} compared to',
                 f'alternatives to {ref_company}',
-                f'{ref_company} or similar',
             ])
         
         # Deduplicate and shuffle for variety
@@ -611,7 +747,11 @@ class AggressiveDiscoveryEngine:
                     unique_queries.append(q)
                     seen.add(q.lower())
         
-        print(f"\n   Generated {len(unique_queries)} search queries:")
+        # Log what we're using
+        if reference_companies:
+            print(f"\n   Using reference companies: {', '.join(reference_companies[:3])}")
+
+        print(f"   Generated {len(unique_queries)} search queries:")
         for i, q in enumerate(unique_queries[:5], 1):
             print(f"      {i}. {q}")
         if len(unique_queries) > 5:
@@ -852,24 +992,101 @@ JSON only:"""
     
     def discover_via_apollo(self) -> List[Dict]:
         """
-        Discover companies via Apollo.io API
+        Discover companies via Apollo.io API (Mixed Companies Search)
         """
-        
-        print("\n[INFO] Searching Apollo.io...\n")
+        print("\n" + "─"*50)
+        print("APOLLO.IO DISCOVERY")
+        print("─"*50)
         
         if not self.apollo_key:
-            print("   [WARNING] Apollo API key not configured")
-            print("   Sign up at https://www.apollo.io/")
+            # Try alternative env var
+            self.apollo_key = os.getenv('APOLLO_API_KEY')
+            
+        if not self.apollo_key:
+            print("   [WARNING] Apollo API key not configured (APOLLO_KEY or APOLLO_API_KEY)")
             return []
+
+        companies = []
+        url = "https://api.apollo.io/api/v1/mixed_companies/search"
         
-        # Note: This is a template - Apollo API structure may vary
-        # User needs to implement based on their Apollo plan
+        # Apollo requires API key in header (not body)
+        headers = {
+            'Content-Type': 'application/json',
+            'X-Api-Key': self.apollo_key
+        }
         
-        print("   [INFO] Apollo integration ready")
-        print("   [TODO] Implement Apollo.io API calls")
-        print("   Docs: https://apolloio.github.io/apollo-api-docs/\n")
+        # Build payload from criteria (no api_key in body)
+        payload = {
+            "page": 1,
+            "per_page": 25, # Conservative batch
+            "q_organization_name": "", 
+        }
+
+        # 1. Keywords
+        industry = self.criteria.get('industry', {})
+        keywords = industry.get('keywords', [])
+        target_industry = industry.get('industry', [])
         
-        return []
+        if keywords:
+            # Apollo keyword search
+            # We combine top 3 keywords
+            payload["q_keywords"] = " ".join(keywords[:3])
+            print(f"   [Apollo] Keywords: {payload['q_keywords']}")
+
+        # 2. Location
+        geo = self.criteria.get('geography', {})
+        regions = geo.get('regions', [])
+        countries = geo.get('countries', [])
+        
+        if regions or countries:
+            # Apollo uses 'organization_locations'
+            # We map broad regions to country codes or names if possible
+            # unique_locations = list(set(regions + countries))
+            # payload["organization_locations"] = unique_locations  # This requires valid Apollo location IDs or strings
+            pass # Skipping exact location mapping for now to avoid zero results due to mismatch
+
+        # 3. Revenue
+        rev = self.criteria.get('revenue', {})
+        # min_rev = rev.get('min_revenue_millions')
+        # max_rev = rev.get('max_revenue_millions')
+        # if min_rev:
+             # Apollo ranges are specific strings, harder to map dynamically without lookup
+             # payload["revenue_range"] = ... 
+             # pass
+
+        try:
+            print(f"   [Apollo] Searching...")
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                orgs = data.get('organizations', [])
+                
+                print(f"   [Apollo] Found {len(orgs)} organizations")
+                
+                for org in orgs:
+                    companies.append({
+                        "name": org.get("name"),
+                        "domain": org.get("domain"),
+                        "website": org.get("website_url"),
+                        "location": f"{org.get('city')}, {org.get('state')}, {org.get('country')}",
+                        "info": org.get("short_description") or org.get("headline"),
+                        "source": "apollo",
+                        "fit_score": 60, # Baseline score for verified data
+                        "raw_data": org # Keep full record
+                    })
+                    
+            elif response.status_code == 422:
+                 print(f"   [Apollo] Query too broad or invalid params. Response: {response.text[:200]}")
+            elif response.status_code == 429:
+                 print("   [Apollo] Rate limited.")
+            else:
+                 print(f"   [Apollo] Error {response.status_code}: {response.text[:200]}")
+
+        except Exception as e:
+            print(f"   [Apollo] Exception: {e}")
+
+        return companies
     
     def merge_and_deduplicate(self, results: Dict[str, List[Dict]]) -> List[Dict]:
         """
@@ -900,78 +1117,79 @@ JSON only:"""
     
     def score_companies(self, companies: List[Dict]) -> List[Dict]:
         """
-        Score companies by similarity to reference company using Gemini.
-        Compares each company against the reference to find best M&A targets.
+        PRELIMINARY scoring during discovery phase.
+        This is a QUICK relevance filter - real scoring happens after enrichment.
+
+        We only filter out obviously irrelevant companies here.
+        Detailed scoring with revenue/size happens in enrichment phase.
         """
-        
+
         if not companies:
             return []
-        
+
         # Get reference company info
         reference_companies = self.criteria.get('reference_companies', [])
-        ref_company = reference_companies[0] if reference_companies else None
-        
+
         # Get criteria details
         industry = self.criteria.get('industry', {})
         industries = industry.get('industry', [])
         keywords = industry.get('keywords', [])
         geography = self.criteria.get('geography', {})
         regions = geography.get('regions', ['USA'])
-        revenue_criteria = self.criteria.get('revenue', {})
-        
-        print(f"\n[INFO] Scoring {len(companies)} companies with Gemini...")
-        
-        if ref_company:
-            print(f"   Reference: {ref_company}")
-        
-        # Score in batches to avoid rate limits
-        batch_size = 10
+
+        print(f"\n[INFO] Quick relevance filtering {len(companies)} companies...")
+
+        if reference_companies:
+            print(f"   Reference companies: {', '.join(reference_companies[:3])}")
+
+        # Quick relevance scoring in batches
+        batch_size = 15
         scored = []
-        
+
         for i in range(0, len(companies), batch_size):
             batch = companies[i:i + batch_size]
-            print(f"   Scoring batch {i//batch_size + 1}/{(len(companies) + batch_size - 1)//batch_size}...")
-            
+            print(f"   Filtering batch {i//batch_size + 1}/{(len(companies) + batch_size - 1)//batch_size}...")
+
             try:
-                batch_scored = self._score_batch_with_gemini(
-                    batch, 
-                    ref_company, 
+                batch_scored = self._quick_relevance_filter(
+                    batch,
+                    reference_companies,
                     industries + keywords,
-                    regions,
-                    revenue_criteria
+                    regions
                 )
                 scored.extend(batch_scored)
-                
+
                 # Rate limit
-                time.sleep(3)
-                
+                time.sleep(2)
+
             except Exception as e:
-                print(f"      Gemini scoring failed: {e}")
-                # Fallback to simple scoring for this batch
+                print(f"      Filtering failed: {e}")
+                # Fallback - keep all with default score
                 for company in batch:
-                    company['fit_score'] = self._simple_score(company, keywords, regions)
-                    company['score_reason'] = "Simple keyword match (Gemini unavailable)"
+                    company['fit_score'] = 50
+                    company['score_reason'] = "Pending enrichment for detailed scoring"
                     scored.append(company)
-        
+
         # Sort by score
         scored.sort(key=lambda x: x.get('fit_score', 0), reverse=True)
-        
-        print(f"   Scoring complete. Top score: {scored[0].get('fit_score', 0) if scored else 0}")
-        
+
+        print(f"   Filtering complete. Kept {len([c for c in scored if c.get('fit_score', 0) >= 30])} relevant companies")
+
         return scored
     
-    def _score_batch_with_gemini(
-        self, 
-        companies: List[Dict], 
-        ref_company: str,
+    def _quick_relevance_filter(
+        self,
+        companies: List[Dict],
+        reference_companies: List[str],
         industry_keywords: List[str],
-        regions: List[str],
-        revenue_criteria: Dict
+        regions: List[str]
     ) -> List[Dict]:
         """
-        Use Gemini to score a batch of companies.
+        Quick relevance filter during discovery.
+        Only checks: Is this company in the right industry/geography?
+        Does NOT try to assess revenue (that requires enrichment).
         """
-        
+
         # Build company list for prompt
         company_summaries = []
         for i, c in enumerate(companies):
@@ -979,53 +1197,51 @@ JSON only:"""
             if c.get('location'):
                 summary += f" | Location: {c.get('location')}"
             if c.get('info'):
-                summary += f" | Info: {c.get('info', '')[:150]}"
-            if c.get('ticker'):
-                summary += f" | Ticker: {c.get('ticker')}"
+                summary += f" | Info: {c.get('info', '')[:100]}"
             company_summaries.append(summary)
-        
+
         company_list = "\n".join(company_summaries)
-        
+
         # Build reference context
         ref_context = ""
-        if ref_company:
-            ref_context = f"""
-REFERENCE COMPANY (find similar companies to this):
-- Name: {ref_company}
-- We are looking for companies similar to {ref_company} for potential M&A
+        if reference_companies:
+            ref_list = ", ".join(reference_companies[:5])
+            ref_context = f"Reference companies (find similar): {ref_list}\n"
 
-"""
-        
-        prompt = f"""You are an M&A analyst scoring potential acquisition targets.
+        prompt = f"""Quick relevance check for M&A target discovery.
 
-{ref_context}TARGET CRITERIA:
-- Industry: {', '.join(industry_keywords[:5])}
-- Geography: {', '.join(regions)}
-- Revenue Range: {revenue_criteria.get('revenue_min_millions', 'N/A')}M - {revenue_criteria.get('revenue_max_millions', 'N/A')}M USD
+{ref_context}Target Industry: {', '.join(industry_keywords[:5])}
+Target Geography: {', '.join(regions)}
 
-COMPANIES TO SCORE:
+Companies to check:
 {company_list}
 
-For each company, provide:
-1. A fit score from 0-100 (how well it matches criteria/reference)
-2. A brief reason (1 sentence)
+For each company, determine RELEVANCE (not final score - that comes after enrichment):
 
-Score higher (70-100) if:
-- Similar industry to reference company
-- Matches geographic criteria
-- Likely in target revenue range
-- Good strategic fit for M&A
+RELEVANCE 70-100 (HIGHLY RELEVANT):
+- Clearly in the target industry
+- Matches geography
+- Appears to be a real operating company
+- Similar to reference companies
 
-Score lower (0-40) if:
-- Wrong industry
-- Wrong geography  
-- Too large (Fortune 500) or too small
-- Not a real company match
+RELEVANCE 40-70 (POSSIBLY RELEVANT):
+- Related industry
+- Geography unclear
+- Needs more research
 
-Return as JSON array:
+RELEVANCE 0-40 (NOT RELEVANT):
+- Wrong industry entirely (e.g., food producer vs packaging)
+- Company no longer exists / was acquired
+- Not a real company (association, government, etc.)
+- Clearly wrong geography
+
+NOTE: Do NOT try to assess company SIZE here. We don't have revenue data yet.
+Just check industry and geography relevance.
+
+Return JSON array:
 [
-  {{"company_number": 1, "score": 75, "reason": "Same industry as reference, US-based"}},
-  {{"company_number": 2, "score": 45, "reason": "Related industry but wrong geography"}}
+  {{"company_number": 1, "score": 80, "reason": "Custom packaging company, US-based"}},
+  {{"company_number": 2, "score": 20, "reason": "Food producer, not packaging manufacturer"}}
 ]
 
 JSON only:"""
@@ -1113,9 +1329,12 @@ JSON only:"""
             if not os.path.exists(DB_PATH):
                 init_database()
             
-            # Create new session
-            self.session_id = create_session(self.criteria)
-            print(f"[DB] Created session #{self.session_id}")
+            # Create new session if not already set
+            if self.session_id:
+                print(f"[DB] Using existing session #{self.session_id}")
+            else:
+                self.session_id = create_session(self.criteria)
+                print(f"[DB] Created session #{self.session_id}")
             
         except Exception as e:
             print(f"[WARNING] Database init failed: {e}")
@@ -1170,7 +1389,7 @@ JSON only:"""
                 db_companies.append({
                     "name": c.get("name", ""),
                     "domain": c.get("domain", ""),
-                    "website": c.get("source_url", "") or c.get("website", ""),
+                    "website": c.get("website", ""),  # Strict: don't use source_url as fallback
                     "source": c.get("source", "discovery"),
                     "score": c.get("fit_score", 50),
                 })

@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![Gemini](https://img.shields.io/badge/Gemini-2.5_Flash-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Cost](https://img.shields.io/badge/Cost-$0-success?style=for-the-badge)]()
+
 
 **Discover, research, and screen M&A targets.**
 
@@ -26,43 +26,86 @@
 | **SEC Validation** | Verified financials from 10-K filings for public companies |
 | **Session Tracking** | Keep searches organized (Packaging vs Dairy, etc.) |
 | **Excel Export** | Professional M&A screening spreadsheet output |
-| **Zero Cost** | Uses only free-tier APIs |
+
 
 ---
 
 ## Quick Start
 
-### 1. Clone & Install
+### Option A: Automated Setup (Recommended for Beginners)
+
+**Windows:**
+```bash
+# Double-click setup.bat or run:
+setup.bat
+```
+
+**Mac/Linux:**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+Then:
+1. Copy `.env.example` to `.env`
+2. Add your Gemini API key
+3. Run the dashboard:
+   ```bash
+   python run.py
+   ```
+4. Open http://localhost:5000
+
+### Option B: Manual Setup
 
 ```bash
 git clone https://github.com/yourusername/portin.git
 cd portin
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # Mac/Linux
+
+# Install dependencies
 pip install -r requirements.txt
-playwright install chromium  # For Crawl4AI
-```
+playwright install chromium
 
-### 2. Set Up API Keys
-
-Copy the example environment file and add your keys:
-
-```bash
+# Configure API keys
 cp .env.example .env
+# Edit .env with your keys
+
+# Start dashboard
+python run.py
 ```
 
-Edit `.env` with your API keys (see `.env.example` for details).
+Open http://localhost:5000
 
-### 3. Run the Pipeline
+### Need Help?
+
+See **[SETUP.md](SETUP.md)** for detailed step-by-step instructions.
+
+---
+
+## Using Porto
+
+### Dashboard (Recommended)
+
+The modern web interface with real-time updates:
 
 ```bash
-# Step 1: Define your search criteria
-python run_intake.py
-
-# Step 2: Discover companies
-python run_discovery.py
-
-# Step 3: Enrich with detailed data
-python run_enrichment.py
+python run.py
 ```
+
+Then go to http://localhost:5000
+
+Features:
+- Interactive search criteria builder
+- Real-time discovery progress
+- Clean glassmorphism UI
+- Session management
+- CSV export
+
+### CLI (Advanced)
 
 Or run all at once:
 
@@ -200,17 +243,6 @@ Select [1/2/3]:
 
 ---
 
-## API Usage
-
-| Service | Free Tier | Used For |
-|---------|-----------|----------|
-| **Gemini** | 1,500 req/day | AI extraction, scoring |
-| **Serper** | 2,500/month | Google search |
-| **Firecrawl** | 500 credits | Web scraping |
-| **SEC EDGAR** | Unlimited | Public company data |
-| **DuckDuckGo** | Unlimited | Search fallback |
-
----
 
 ## Maintenance Utilities
 

@@ -12,9 +12,104 @@ Replaces JSON file storage with queryable SQLite.
 import sqlite3
 import json
 import os
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
+
+
+def extract_company_terms(name: str) -> set:
+    """
+    Extract all meaningful terms from a company name, including parenthetical content.
+    Returns a set of lowercase terms for comparison.
+    
+    Example: "GCMMF (Amul)" -> {'gcmmf', 'amul'}
+            "Gujarat Cooperative Milk Marketing Federation (GCMMF)" -> {'gujarat', 'cooperative', 'marketing', 'federation', 'gcmmf'}
+    """
+    if not name:
+        return set()
+    
+    n = name.lower().strip()
+    
+    # Extract content from parentheses separately
+    parens = re.findall(r'\(([^)]+)\)', n)
+    
+    # Remove common suffixes/noise words
+    noise_words = {
+        'private', 'pvt', 'limited', 'ltd', 'inc', 'incorporated', 'corp', 
+        'corporation', 'llc', 'llp', 'co', 'company', 'the', 'of', 'and',
+        'products', 'product', 'industries', 'industry', 'enterprises',
+        'enterprise', 'foods', 'food', 'dairy', 'milk', 'brand', 'state',
+        'cooperative', 'federation', 'union', 'marketing', 'producers'
+    }
+    
+    # Get all words from the name (including from parentheses)
+    all_text = n + ' ' + ' '.join(parens)
+    
+    # Extract words, remove special chars
+    words = re.findall(r'[a-z0-9]+', all_text)
+    
+    # Filter out noise words and very short terms
+    terms = {w for w in words if w not in noise_words and len(w) >= 3}
+    
+    return terms
+
+
+def normalize_company_name(name: str) -> str:
+    """
+    Normalize company name for duplicate detection.
+    Returns the most distinctive term(s) from the company name.
+    """
+    terms = extract_company_terms(name)
+    if not terms:
+        return ""
+    
+    # Sort by length descending (longer terms are usually more distinctive)
+    return ' '.join(sorted(terms, key=lambda x: -len(x)))
+
+
+def is_similar_company(name1: str, name2: str) -> bool:
+    """
+    Check if two company names are similar enough to be duplicates.
+    Uses term overlap - if they share any significant term, they're likely the same.
+    
+    Examples:
+    - "Amul" vs "GCMMF (Amul)" -> True (share 'amul')
+    - "Amul" vs "Gujarat Cooperative Milk Marketing Federation (GCMMF)" -> True (if GCMMF matches)
+    - "Mother Dairy" vs "Amul" -> False (no shared terms)
+    """
+    terms1 = extract_company_terms(name1)
+    terms2 = extract_company_terms(name2)
+    
+    if not terms1 or not terms2:
+        return False
+    
+    # Check for shared terms
+    shared = terms1 & terms2
+    
+    if shared:
+        # If they share any term of 4+ characters, consider them duplicates
+        for term in shared:
+            if len(term) >= 4:
+                return True
+    
+    # Also check if the normalized names are contained in each other
+    n1 = normalize_company_name(name1)
+    n2 = normalize_company_name(name2)
+    
+    if n1 and n2:
+        # Check if shortest meaningful term appears in the other
+        short_terms1 = [t for t in terms1 if len(t) >= 4]
+        short_terms2 = [t for t in terms2 if len(t) >= 4]
+        
+        for t1 in short_terms1:
+            if t1 in n2:
+                return True
+        for t2 in short_terms2:
+            if t2 in n1:
+                return True
+    
+    return False
 
 
 # Default database path - in the database/ directory
@@ -74,6 +169,12 @@ def init_database(db_path: str = DB_PATH):
                 priority TEXT,
                 raw_data_json TEXT,
                 enriched_data_json TEXT,
+                verified_claims_json TEXT,
+                citations_json TEXT,
+                research_grade TEXT,
+                hallucination_risk_score REAL,
+                apollo_data_json TEXT,
+                research_completed_at TEXT,
                 FOREIGN KEY (session_id) REFERENCES sessions(id),
                 UNIQUE(session_id, name)
             )
@@ -111,6 +212,23 @@ def init_database(db_path: str = DB_PATH):
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_session ON checkpoints(session_id)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_scraped_urls ON scraped_urls(url)")
         
+        
+        # Helper for migration
+        def _add_column(cur, table, col_def):
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN {col_def}")
+                print(f"[DB] Added column {col_def} to {table}")
+            except Exception:
+                pass # Column likely exists
+
+        # Migration: Add new Deep Research columns to existing table
+        _add_column(cursor, "companies", "verified_claims_json TEXT")
+        _add_column(cursor, "companies", "citations_json TEXT")
+        _add_column(cursor, "companies", "research_grade TEXT")
+        _add_column(cursor, "companies", "hallucination_risk_score REAL")
+        _add_column(cursor, "companies", "apollo_data_json TEXT")
+        _add_column(cursor, "companies", "research_completed_at TEXT")
+
         print(f"[DB] Database initialized at {db_path}")
 
 
@@ -174,6 +292,40 @@ def update_session_status(session_id: int, status: str, db_path: str = DB_PATH):
         cursor.execute("""
             UPDATE sessions SET status = ? WHERE id = ?
         """, (status, session_id))
+
+
+def update_session_criteria(session_id: int, criteria: Dict, db_path: str = DB_PATH):
+    """Update session criteria (for recycling empty sessions)."""
+    
+    with get_db_connection(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE sessions SET criteria_json = ?, created_at = datetime('now')
+            WHERE id = ?
+        """, (json.dumps(criteria), session_id))
+
+
+def merge_sessions(source_ids: list, target_id: int, db_path: str = DB_PATH):
+    """Merge multiple source sessions into a target session."""
+    
+    with get_db_connection(db_path) as conn:
+        cursor = conn.cursor()
+        
+        # 1. Move companies to target session
+        placeholders = ','.join(['?'] * len(source_ids))
+        cursor.execute(f"""
+            UPDATE companies 
+            SET session_id = ? 
+            WHERE session_id IN ({placeholders})
+        """, [target_id] + source_ids)
+        
+        # 2. Delete source sessions
+        cursor.execute(f"""
+            DELETE FROM sessions 
+            WHERE id IN ({placeholders})
+        """, source_ids)
+
+        return True
 
 
 def get_all_sessions(db_path: str = DB_PATH) -> List[Dict]:
@@ -266,12 +418,33 @@ def add_company(
     source: str = "unknown",
     score: float = None,
     raw_data: Dict = None,
-    db_path: str = DB_PATH
+    db_path: str = DB_PATH,
+    skip_similarity_check: bool = False
 ) -> Optional[int]:
-    """Add a discovered company. Returns company_id or None if duplicate."""
+    """
+    Add a discovered company. Returns company_id or None if duplicate.
+    
+    Uses fuzzy matching to detect similar company names within the same session.
+    Set skip_similarity_check=True for exact-match-only behavior.
+    """
     
     with get_db_connection(db_path) as conn:
         cursor = conn.cursor()
+        
+        # Check for similar companies in this session (unless skipped)
+        if not skip_similarity_check:
+            cursor.execute("""
+                SELECT id, name FROM companies WHERE session_id = ?
+            """, (session_id,))
+            
+            existing = cursor.fetchall()
+            normalized_new = normalize_company_name(name)
+            
+            for row in existing:
+                if is_similar_company(name, row['name']):
+                    # Similar company already exists - skip
+                    return None
+        
         try:
             cursor.execute("""
                 INSERT INTO companies (session_id, name, domain, website, source, score, raw_data_json, status)
@@ -279,7 +452,7 @@ def add_company(
             """, (session_id, name, domain, website, source, score, json.dumps(raw_data or {})))
             return cursor.lastrowid
         except sqlite3.IntegrityError:
-            # Duplicate company in this session
+            # Exact duplicate company name in this session
             return None
 
 

@@ -13,6 +13,7 @@ import time
 from typing import Dict, List, Optional
 import google.generativeai as genai
 from dotenv import load_dotenv
+from config.model_config import get_current_model
 
 load_dotenv()
 
@@ -26,7 +27,7 @@ class AIResearchConsultant:
     """
     
     def __init__(self):
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        self.model = genai.GenerativeModel(get_current_model())
         self.criteria = {}
         self.conversation_history = []
         
@@ -65,6 +66,29 @@ class AIResearchConsultant:
         print("\nThis will take about 2 minutes. Let's begin!\n")
         time.sleep(1)
     
+    def process_form_inputs(self, form_data: Dict[str, str]) -> Dict:
+        """
+        Process form inputs from the dashboard.
+        """
+        # Map form fields to questions
+        questions_map = {
+            'industry': "What industry or business sector are you targeting? Any reference companies?",
+            'revenue': "What's your target revenue range?",
+            'geography': "Any geographic preferences?",
+            'ownership': "What type of ownership are you interested in?",
+            'capabilities': "Any specific capabilities or synergies you're looking for?"
+        }
+        
+        for field_id, answer in form_data.items():
+            if field_id in questions_map:
+                question = questions_map[field_id]
+                self.parse_and_store(field_id, question, answer)
+        
+        # Save to output/search_criteria.json for debugging/reference
+        self.export_criteria()
+        
+        return self.criteria
+
     def conduct_interview(self):
         """
         Smart interview process
@@ -74,9 +98,9 @@ class AIResearchConsultant:
         questions = [
             {
                 'id': 'industry',
-                'question': "What industry or business sector are you targeting?",
-                'examples': ['promotional products', 'signage and printing', 'tech services', 'manufacturing'],
-                'hint': "Be as specific as possible"
+                'question': "What industry or business sector are you targeting? Any reference companies?",
+                'examples': ['promotional products like Vistaprint', 'custom packaging similar to Packlane', 'tech services'],
+                'hint': "Be specific. Mention reference companies if you have any (e.g., 'companies like X, Y, Z')"
             },
             {
                 'id': 'revenue',
@@ -142,9 +166,10 @@ Field: {field_id}
 Extract structured information based on the field:
 
 For 'industry':
-  Extract: {{"industry": ["list of industries"], "keywords": ["relevant search terms"], "specifics": "detailed description"}}
-  Example: If user says "promotional products, especially signage"
-  Return: {{"industry": ["promotional products", "signage", "printing"], "keywords": ["promotional", "signage", "banner", "printing"], "specifics": "Promotional products with focus on signage and printing"}}
+  Extract: {{"industry": ["list of industries"], "keywords": ["relevant search terms"], "reference_companies": ["list of reference/example companies mentioned"], "specifics": "detailed description"}}
+  IMPORTANT: If the user mentions any reference companies, example companies, or competitors (like "companies like X", "similar to Y", "reference would be Z"), extract them into the reference_companies array.
+  Example: If user says "promotional products, especially signage, reference companies would be Vistaprint and 4over"
+  Return: {{"industry": ["promotional products", "signage", "printing"], "keywords": ["promotional", "signage", "banner", "printing"], "reference_companies": ["Vistaprint", "4over"], "specifics": "Promotional products with focus on signage and printing"}}
 
 For 'revenue':
   Extract: {{"revenue_min_millions": number, "revenue_max_millions": number, "currency": "USD"}}
@@ -209,6 +234,9 @@ Return ONLY valid JSON, no explanation, no markdown.
         if field_id == 'industry':
             industries = extracted.get('industry', [])
             print(f"      Industries: {', '.join(industries)}")
+            ref_companies = extracted.get('reference_companies', [])
+            if ref_companies:
+                print(f"      Reference companies: {', '.join(ref_companies)}")
             
         elif field_id == 'revenue':
             min_rev = extracted.get('revenue_min_millions', 0)
@@ -329,20 +357,29 @@ Return ONLY valid JSON.
         # Get the project root directory (parent of intake/)
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         output_dir = os.path.join(project_root, 'output')
-        
+
         # Ensure output directory exists
         os.makedirs(output_dir, exist_ok=True)
-        
+
         filepath = os.path.join(output_dir, filename)
-        
+
+        # Extract reference companies to top level for discovery engine
+        criteria_export = self.criteria.copy()
+        industry_data = criteria_export.get('industry', {})
+        ref_companies = industry_data.get('reference_companies', [])
+        if ref_companies:
+            criteria_export['reference_companies'] = ref_companies
+
         with open(filepath, 'w') as f:
             json.dump({
-                'criteria': self.criteria,
+                'criteria': criteria_export,
                 'conversation': self.conversation_history,
                 'timestamp': time.time()
             }, f, indent=2)
-        
+
         print(f"\n[SUCCESS] Criteria saved to output/{filename}")
+        if ref_companies:
+            print(f"   Reference companies for competitor search: {', '.join(ref_companies)}")
 
 
 def main():

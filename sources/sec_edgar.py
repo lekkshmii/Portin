@@ -25,6 +25,7 @@ import requests
 from typing import List, Dict, Optional
 from utils.logging import get_logger
 from utils.retry import retry_api_call
+from config.model_config import get_current_model
 
 logger = get_logger(__name__)
 
@@ -64,7 +65,7 @@ class SECEdgarSearch:
                 from dotenv import load_dotenv
                 load_dotenv()
                 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
-                self._gemini = genai.GenerativeModel('gemini-2.5-flash')
+                self._gemini = genai.GenerativeModel(get_current_model())
             except Exception as e:
                 logger.warning("Gemini not available for SEC filtering", error=str(e))
         return self._gemini
@@ -227,6 +228,13 @@ class SECEdgarSearch:
         """
         logger.info("Searching SEC by keywords + Gemini", keywords=keywords)
         
+        # Generic keywords that return too many irrelevant results
+        SKIP_KEYWORDS = {
+            'manufacturing', 'company', 'inc', 'corp', 'llc', 'ltd', 'services',
+            'solutions', 'products', 'group', 'industries', 'enterprise', 'holdings',
+            'technology', 'technologies', 'international', 'global', 'systems'
+        }
+        
         # Step 1: Get SIC codes for keywords
         sic_codes = get_sic_for_industry(keywords)
         
@@ -236,8 +244,15 @@ class SECEdgarSearch:
             sic_results = self.search_by_sic(sic, limit=20)
             candidates.extend(sic_results)
         
-        # Step 3: Add name matches
+        # Step 3: Add name matches - BUT skip generic keywords
         for keyword in keywords[:3]:
+            # Skip generic keywords that return irrelevant results
+            if keyword.lower() in SKIP_KEYWORDS:
+                logger.info("Skipping generic keyword for name search", keyword=keyword)
+                continue
+            # Skip very short keywords
+            if len(keyword) < 4:
+                continue
             name_results = self.search_by_name(keyword, limit=10)
             candidates.extend(name_results)
         
