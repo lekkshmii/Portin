@@ -199,6 +199,10 @@ class AggressiveDiscoveryEngine:
         print("[INFO] Scoring companies by fit...")
         scored_companies = self.score_companies(new_companies)
         
+        # Resolve official websites
+        self.log("[INFO] Resolving official company websites...")
+        scored_companies = self._resolve_websites(scored_companies)
+        
         # Save results (both JSON and database)
         self.save_results(scored_companies)
         
@@ -236,6 +240,17 @@ class AggressiveDiscoveryEngine:
         except Exception as e:
             print(f"[WARNING] Reference profiling failed: {e}")
             print("Continuing with standard discovery...\n")
+    
+    def _resolve_websites(self, companies: List[Dict]) -> List[Dict]:
+        """
+        Resolve official websites for discovered companies using Grounding.
+        """
+        try:
+            from sources.google_grounding import resolve_company_websites
+            return resolve_company_websites(companies, batch_size=10, logger=self.log)
+        except Exception as e:
+            self.log(f"[WARNING] Website resolution failed: {e}")
+            return companies
     
     def check_available_sources(self) -> List[str]:
         """

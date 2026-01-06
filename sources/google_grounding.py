@@ -420,6 +420,131 @@ def search_industry_companies_grounded(
     return all_companies
 
 
+def resolve_company_websites(
+    companies: List[Dict],
+    batch_size: int = 10,
+    logger=print
+) -> List[Dict]:
+    """
+    Use Grounding to find official websites for discovered companies.
+    
+    Batches companies together to minimize API calls.
+    Each batch asks Gemini to find websites for multiple companies at once.
+    
+    Args:
+        companies: List of company dicts (must have 'name' key)
+        batch_size: Number of companies per API call
+        logger: Logging function
+    
+    Returns:
+        Updated companies list with 'website' field populated where found
+    """
+    if not companies:
+        return companies
+    
+    # Only process companies that don't already have a website
+    companies_needing_website = [
+        (i, c) for i, c in enumerate(companies) 
+        if not c.get('website') and c.get('name')
+    ]
+    
+    if not companies_needing_website:
+        logger("   [Websites] All companies already have websites")
+        return companies
+    
+    logger(f"   [Websites] Resolving websites for {len(companies_needing_website)} companies...")
+    
+    try:
+        from google import genai
+        from google.genai import types
+        
+        api_key = os.getenv('GEMINI_API_KEY')
+        if not api_key:
+            logger("   [Websites] No API key, skipping website resolution")
+            return companies
+        
+        client = genai.Client(api_key=api_key)
+        
+        # Configure grounding tool
+        grounding_tool = types.Tool(
+            google_search=types.GoogleSearch()
+        )
+        
+        config = types.GenerateContentConfig(
+            tools=[grounding_tool]
+        )
+        
+        # Process in batches
+        resolved_count = 0
+        
+        for batch_start in range(0, len(companies_needing_website), batch_size):
+            batch = companies_needing_website[batch_start:batch_start + batch_size]
+            company_names = [c['name'] for _, c in batch]
+            
+            logger(f"   [Websites] Batch {batch_start // batch_size + 1}: {len(batch)} companies")
+            
+            prompt = f"""Find the official company website URLs for these companies:
+
+{chr(10).join(f'{i+1}. {name}' for i, name in enumerate(company_names))}
+
+For each company, find their main corporate/official website URL.
+Return ONLY a JSON object mapping company names to URLs:
+
+{{
+  "Company Name 1": "https://company1.com",
+  "Company Name 2": "https://company2.com"
+}}
+
+If you cannot find a company's website, use null for the value.
+JSON only, no explanation:"""
+
+            try:
+                response = client.models.generate_content(
+                    model=get_current_model(),
+                    contents=prompt,
+                    config=config
+                )
+                
+                result_text = response.text.strip()
+                
+                # Clean JSON from markdown
+                if '```json' in result_text:
+                    result_text = result_text.split('```json')[1].split('```')[0].strip()
+                elif '```' in result_text:
+                    result_text = result_text.split('```')[1].split('```')[0].strip()
+                
+                website_map = json.loads(result_text)
+                
+                # Update companies with found websites
+                for idx, company in batch:
+                    name = company['name']
+                    # Try exact match first, then case-insensitive
+                    website = website_map.get(name)
+                    if not website:
+                        # Try case-insensitive match
+                        for key, url in website_map.items():
+                            if key.lower() == name.lower():
+                                website = url
+                                break
+                    
+                    if website and isinstance(website, str) and website.startswith('http'):
+                        companies[idx]['website'] = website
+                        resolved_count += 1
+                
+            except Exception as e:
+                logger(f"   [Websites] Batch error: {e}")
+            
+            time.sleep(2)  # Rate limit between batches
+        
+        logger(f"   [Websites] Resolved {resolved_count} websites")
+        
+    except ImportError:
+        logger("   [Websites] google-genai SDK not available, skipping")
+    except Exception as e:
+        logger(f"   [Websites] Error: {e}")
+    
+    return companies
+
 
 class GoogleGroundingSearch:
     """Class wrapper for Google Grounding Search."""
